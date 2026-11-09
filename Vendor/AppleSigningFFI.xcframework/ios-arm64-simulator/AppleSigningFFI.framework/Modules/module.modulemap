@@ -1,0 +1,4 @@
+framework module AppleSigningFFI {
+    umbrella header "AppleSigningFFI.h"
+    export *
+}

@@ -1,0 +1,40 @@
+.DS_Store
+build/
+.build/
+DerivedData/
+target/
+__pycache__/
+*.py[cod]
+*.xcuserstate
+xcuserdata/
+*.xcarchive/
+*.previous/
+Artifacts/*
+!Artifacts/.gitkeep
+
+# Local credentials, device pairing records and packaged applications.
+.env
+.env.*
+*.p8
+*.pem
+*.key
+*.p12
+*.mobileprovision
+*.mobiledevicepairing
+*.mobilepair
+*.ipa
+# These fixtures are generated disposable identities, never user credentials.
+!Tests/Fixtures/Fixture.ipa
+!Tests/Fixtures/TestIdentity.p12
+!Tests/Fixtures/OtherIdentity.p12
+!Tests/Fixtures/PluginIdentity.p12
+!Tests/Fixtures/HostGroupIdentity.p12
+!Tests/Fixtures/TestIdentity*.mobileprovision
+!Tests/Fixtures/OtherIdentity*.mobileprovision
+!Tests/Fixtures/PluginIdentity*.mobileprovision
+!Tests/Fixtures/HostGroupIdentity*.mobileprovision
+
+# Keep internal investigation and device-validation notes local.
+Docs/*
+!Docs/DEPENDENCIES.md
+Runtime/StoreEngine/README.md

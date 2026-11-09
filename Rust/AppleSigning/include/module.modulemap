@@ -1,0 +1,4 @@
+module AppleSigningFFI {
+    header "AppleSigningFFI.h"
+    export *
+}

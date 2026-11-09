@@ -1,0 +1,366 @@
+name: Retools
+options:
+  minimumXcodeGenVersion: 2.42.0
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CLANG_CXX_LANGUAGE_STANDARD: gnu++17
+    CLANG_ENABLE_MODULES: YES
+    CLANG_ENABLE_CPP_MODULES: YES
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    TARGETED_DEVICE_FAMILY: "1,2"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: 51
+    SWIFT_STRICT_CONCURRENCY: targeted
+    EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+targets:
+  Retools:
+    type: application
+    platform: iOS
+    sources: [Host]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.retools.ios
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+        CODE_SIGN_ENTITLEMENTS: Host/Retools.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: Host/Retools-Bridging-Header.h
+    info:
+      path: Host/Info.plist
+      properties:
+        CFBundleDisplayName: Retools
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleLocalizations: [zh-Hans]
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        RetoolsPrivateSandbox: true
+        RetoolsFileToolsAppGroup: group.dev.retools.filetools
+        NSSupportsLiveActivities: true
+        CADisableMinimumFrameDurationOnPhone: true
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.retools.ios
+            CFBundleURLSchemes: [retools]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: iOS Application Archive
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes: [com.apple.itunes.ipa, public.zip-archive]
+        LSApplicationQueriesSchemes: [sidestore, altstore, stikdebug, retoolsdecrypt]
+        LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSCameraUsageDescription: 容器中的应用请求使用相机。
+        NSMicrophoneUsageDescription: 容器中的应用请求使用麦克风。
+        NSPhotoLibraryUsageDescription: 容器中的应用请求访问照片。
+        NSPhotoLibraryAddUsageDescription: 保存生成的图片及容器应用中的照片。
+        NSLocationWhenInUseUsageDescription: 定位模拟期间用于保持 Retools 在后台运行；容器中的应用也可能请求获取位置。
+        NSContactsUsageDescription: 容器中的应用请求访问通讯录。
+        NSFaceIDUsageDescription: 容器中的应用请求使用面容 ID。
+        NSBluetoothAlwaysUsageDescription: 容器中的应用请求使用蓝牙。
+        NSLocalNetworkUsageDescription: Retools 通过本地网络发现这台设备并完成配对，回环由你的外部代理提供。
+        NSBonjourServices: [_remotepairing-pairable-host._tcp, _remotepairing._tcp]
+        NSSpeechRecognitionUsageDescription: 容器中的应用请求使用语音识别。
+        NSMotionUsageDescription: 容器中的应用请求访问运动数据。
+        NSCalendarsFullAccessUsageDescription: 容器中的应用请求访问日历。
+        NSRemindersFullAccessUsageDescription: 容器中的应用请求访问提醒事项。
+        NSAppleMusicUsageDescription: 容器中的应用请求访问媒体资料库。
+        UIBackgroundModes: [processing, fetch, location]
+        BGTaskSchedulerPermittedIdentifiers: [dev.retools.ios.renewal, dev.retools.ios.renewal-check]
+    dependencies:
+      - target: ContainerControls
+        embed: true
+        link: false
+      - target: RetoolsPluginLoader
+        embed: true
+        link: false
+      - target: RetoolsPairingWidget
+        embed: true
+      - target: LiveContainerSwiftUI
+        embed: true
+        link: false
+      - target: RetoolsNative
+        embed: true
+        link: false
+      - target: LiveContainerShared
+        embed: true
+        link: false
+      - target: RuntimeProbe
+        embed: true
+        link: false
+      - target: IdeviceGateway
+        embed: true
+        link: false
+      - target: MinimuxerCommon
+        embed: true
+        link: false
+      - framework: Vendor/OpenSSL.xcframework
+        embed: true
+        link: false
+  LiveContainerShared:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Vendor/LiveContainer/LiveContainer
+        excludes: [Info.plist]
+        headerVisibility: project
+      - path: Vendor/LiveContainer/litehook/src
+        headerVisibility: project
+      - path: Runtime/ContainerBridge
+        headerVisibility: project
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.reukix.retools.runtime
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: ""
+        DEFINES_MODULE: NO
+        ENABLE_MODULE_VERIFIER: NO
+        OTHER_CFLAGS: "$(inherited) -fcommon"
+        GCC_PREPROCESSOR_DEFINITIONS: "$(inherited) FISHHOOK_EXPORT=1"
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/LiveContainer/LiveContainer $(SRCROOT)/Vendor/LiveContainer/litehook/src $(SRCROOT)/Vendor/LiveContainer/litehook/external/include $(SRCROOT)/Runtime/ContainerBridge"
+    dependencies:
+      - sdk: Security.framework
+      - sdk: UIKit.framework
+  RetoolsNative:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Native
+        headerVisibility: public
+      - path: Vendor/WorseQuery
+        excludes: [LICENSE, README.md]
+        headerVisibility: project
+        compilerFlags: "-fvisibility=hidden"
+      - path: Vendor/ZSign
+        excludes: [zsign.cpp, certcheck.cpp, common/archive.cpp, LICENSE]
+        headerVisibility: project
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.reukix.retools.native
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_MODULE_VERIFIER: NO
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/ZSign $(SRCROOT)/Vendor/ZSign/common $(SRCROOT)/Vendor/LiveContainer/LiveContainer $(SRCROOT)/Vendor/Libarchive/include $(SRCROOT)/Vendor/WorseQuery"
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+        GCC_WARN_INHIBIT_ALL_WARNINGS: YES
+    dependencies:
+      - target: IdeviceGateway
+        embed: false
+      - target: LiveContainerShared
+        embed: false
+      - framework: Vendor/OpenSSL.xcframework
+        embed: false
+      - sdk: libz.tbd
+      - sdk: libarchive.tbd
+      - sdk: libc++.tbd
+      - sdk: Security.framework
+      - sdk: UIKit.framework
+  LiveContainerSwiftUI:
+    type: framework
+    platform: iOS
+    sources:
+      - path: App
+      - path: Shared
+      - path: DecryptionCore
+      - path: Vendor/ZIPFoundation
+        excludes: [LICENSE, Resources]
+      - path: Resources
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.reukix.retools.ui
+        GENERATE_INFOPLIST_FILE: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+        OTHER_LDFLAGS: "$(inherited) -Wl,-u,_uc_version -Wl,-u,_uc_open -Wl,-u,_uc_close -Wl,-u,_uc_query -Wl,-u,_uc_ctl -Wl,-u,_uc_strerror -Wl,-u,_uc_mem_map -Wl,-u,_uc_mem_unmap -Wl,-u,_uc_mem_read -Wl,-u,_uc_mem_write -Wl,-u,_uc_reg_read -Wl,-u,_uc_reg_write -Wl,-u,_uc_emu_start -Wl,-u,_uc_emu_stop -Wl,-u,_uc_hook_add -Wl,-u,_uc_hook_del"
+    dependencies:
+      - target: RetoolsDecryptHelper
+        embed: false
+        link: false
+      - target: ContainerControls
+        embed: false
+      - target: RetoolsNative
+        embed: false
+      - sdk: libz.tbd
+      - target: IdeviceGateway
+        embed: false
+      - target: MinimuxerCommon
+        embed: false
+      - framework: Vendor/AppleSigningFFI.xcframework
+        embed: false
+      - framework: Vendor/StoreDownloadEngine.xcframework
+        embed: false
+      - sdk: libresolv.tbd
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: libc++.tbd
+    postBuildScripts:
+      - name: Package Decryption Helper
+        script: python3 "$SRCROOT/Scripts/package-decryption-helper.py"
+        basedOnDependencyAnalysis: false
+  RetoolsDecryptHelper:
+    type: application
+    platform: iOS
+    sources:
+      - path: DecryptionHelper
+        excludes: [Info.plist]
+      - path: DecryptionCore
+      - path: Shared/FairPlayFormat.swift
+      - path: Native/RTFairPlayNative.c
+      - path: App/ArchiveService.swift
+      - path: Vendor/ZIPFoundation
+        excludes: [LICENSE, Resources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.retools.decrypt
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) RETOOLS_DECRYPT_HELPER"
+        SWIFT_OBJC_BRIDGING_HEADER: DecryptionHelper/Helper-Bridging-Header.h
+        HEADER_SEARCH_PATHS: "$(inherited) $(DERIVED_FILE_DIR)"
+        CODE_SIGNING_ALLOWED: NO
+        SKIP_INSTALL: YES
+    info:
+      path: DecryptionHelper/Info.plist
+      properties:
+        CFBundleDisplayName: Retools 解密助手
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        RetoolsDecryptHelper: true
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.retools.decrypt
+            CFBundleURLSchemes: [retoolsdecrypt]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    preBuildScripts:
+      - name: Prepare Standalone FairPlay Header
+        script: cp "$SRCROOT/Native/RTFairPlayNative.h" "$DERIVED_FILE_DIR/RTFairPlayStandalone.h"
+        inputFiles: [$(SRCROOT)/Native/RTFairPlayNative.h]
+        outputFiles: [$(DERIVED_FILE_DIR)/RTFairPlayStandalone.h]
+    dependencies:
+      - sdk: libz.tbd
+  ContainerControls:
+    type: framework
+    platform: iOS
+    sources: [ContainerControls, Shared/ContainerControlRequest.swift]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.retools.ios.controls
+        GENERATE_INFOPLIST_FILE: YES
+  RetoolsPluginLoader:
+    type: framework
+    platform: iOS
+    sources: [Runtime/PluginLoader]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.retools.ios.pluginloader
+        GENERATE_INFOPLIST_FILE: YES
+        CLANG_ENABLE_OBJC_ARC: YES
+        SKIP_INSTALL: YES
+    dependencies:
+      - sdk: Foundation.framework
+  RetoolsPairingWidget:
+    type: app-extension
+    platform: iOS
+    sources: [PairingWidget, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.retools.ios.pairing
+        CODE_SIGN_ENTITLEMENTS: PairingWidget/RetoolsPairingWidget.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"
+    info:
+      path: PairingWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Retools 配对
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  MinimuxerCommon:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Vendor/Minimuxer/Common
+        excludes: [Package.swift]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.retools.ios.device.common
+        GENERATE_INFOPLIST_FILE: YES
+  IdeviceGateway:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Vendor/Minimuxer/DeviceGateway
+        excludes: [Package.swift, libimobiledevice]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.retools.ios.device.gateway
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: MinimuxerCommon
+        embed: false
+      - framework: Vendor/IDevice.xcframework
+        embed: false
+      - sdk: libc++.tbd
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+  RuntimeProbe:
+    type: framework
+    platform: iOS
+    sources: [Runtime/Probe]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.reukix.retools.probe
+        GENERATE_INFOPLIST_FILE: YES
+        DEFINES_MODULE: NO
+  RetoolsTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+        excludes: [Fixtures]
+      - path: Tests/Fixtures
+        buildPhase: resources
+        type: group
+    dependencies:
+      - target: LiveContainerSwiftUI
+      - target: RetoolsNative
+      - target: Retools
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.reukix.retools.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Retools.app/Retools"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
+  RetoolsUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: Retools
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.reukix.retools.uitests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  RetoolsUIReview:
+    build:
+      targets:
+        Retools: all
+    test:
+      targets: [RetoolsUITests]
+      gatherCoverageData: false
+  Retools:
+    build:
+      targets:
+        Retools: all
+    test:
+      targets: [RetoolsTests, RetoolsUITests]
+      gatherCoverageData: false
