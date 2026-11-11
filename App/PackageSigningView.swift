@@ -36,6 +36,7 @@ struct PackageSigningView: View {
     @State private var embeddedAttempt = 0
     private var injected: [EmbeddedLibrary] { embedded.filter(\.isInjectedPlugin) }
     private var package: AppPackage? { store.state.packages.first { $0.id == packageID } }
+    private var updatesRetools: Bool { package.map { HostUpdate.isCandidate($0.bundleID) } ?? false }
     private var entries: [PluginInjection] { package?.pluginInjections ?? [] }
     private var identity: SigningIdentity? { options.identityID == nil ? store.activeIdentity : options.selectedIdentity(in: store.state.identities) }
     private var busy: Bool { (store.isWorking && !store.workLabel.isEmpty) || localBusy }
@@ -67,7 +68,13 @@ struct PackageSigningView: View {
                     }.padding(.horizontal, 20).padding(.vertical, 18).frame(maxWidth: 700).frame(maxWidth: .infinity)
                 }.ambientBackground().disabled(busy)
                     .safeAreaInset(edge: .bottom) { footer(package) }
-                    .onAppear { if !loaded { options = package.signingOptions ?? PackageSigningOptions(); loaded = true; store.signingIssue = nil } }
+                    .onAppear {
+                        if !loaded {
+                            options = package.signingOptions ?? PackageSigningOptions()
+                            if updatesRetools, let id = Bundle.main.bundleIdentifier { options.bundleID = id }
+                            loaded = true; store.signingIssue = nil
+                        }
+                    }
                     .onChange(of: options) { _, value in if loaded { queueOptions(value) } }
                     .onChange(of: entries.map(\.id)) { _, values in selectedEntries.formIntersection(values) }
                     .onChange(of: store.state.identities.map(\.id)) { _, _ in
@@ -154,12 +161,17 @@ struct PackageSigningView: View {
                     .contextMenu { Button("恢复原图标") { options.iconFile = nil; options.repairDarkIcon = true; options.repairWhiteIcon = false } }
                 VStack(alignment: .leading, spacing: 7) {
                     Button { field = .name } label: { HStack(spacing: 7) { Text(options.name(for: package)).font(.title2.bold()).foregroundStyle(Color.primary).multilineTextAlignment(.leading); Image(systemName: "pencil").font(.caption).foregroundStyle(Palette.tertiaryText) } }.buttonStyle(.plain).accessibilityIdentifier("project.name")
-                    Button { field = .identifier } label: { HStack(spacing: 6) { Text(options.identifier(for: package)).font(.caption.monospaced()).lineLimit(2); Image(systemName: "square.and.pencil").font(.caption2) }.foregroundStyle(Color.secondary) }.buttonStyle(.plain).accessibilityIdentifier("project.bundleID")
+                    Button { field = .identifier } label: { HStack(spacing: 6) { Text(options.identifier(for: package)).font(.caption.monospaced()).lineLimit(2); if !updatesRetools { Image(systemName: "square.and.pencil").font(.caption2) } }.foregroundStyle(Color.secondary) }.buttonStyle(.plain).disabled(updatesRetools).accessibilityIdentifier("project.bundleID")
                     Button { field = .version } label: { Text("版本 " + options.appVersion(for: package)).font(.caption).foregroundStyle(Color.secondary) }.buttonStyle(.plain).accessibilityIdentifier("project.version")
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             Button { field = .note } label: { Label(options.note.isEmpty ? "添加备注" : options.note, systemImage: "text.alignleft").font(.caption).foregroundStyle(Color.secondary).lineLimit(2) }.buttonStyle(.plain)
-            if options.identifier(for: package) != package.bundleID {
+            if updatesRetools {
+                Label("更新 Retools", systemImage: "arrow.triangle.2.circlepath").font(.subheadline.weight(.medium))
+                Text("选择当前安装所属团队的 Apple ID 证书。新版将沿用当前安装标识并保留配对扩展；安装时应用可能退出，重新打开后确认更新结果。")
+                    .font(.caption).foregroundStyle(Color.secondary).accessibilityIdentifier("project.hostUpdate")
+            }
+            if !updatesRetools, options.identifier(for: package) != package.bundleID {
                 Toggle(isOn: $migrateData) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("安装时迁移原应用的数据").font(.subheadline)
@@ -376,7 +388,7 @@ struct PackageSigningView: View {
                 Button { runSign(install: !exportOnly) } label: {
                     HStack(spacing: 9) {
                         if busy { ProgressView().tint(.white) } else { Image(systemName: exportOnly ? "square.and.arrow.up.fill" : "arrow.down.app.fill") }
-                        Text(busy ? (store.workLabel.isEmpty ? "正在准备…" : store.workLabel) : exportOnly ? "签名并导出" : "签名并安装").font(.body.weight(.semibold)).lineLimit(1)
+                        Text(busy ? (store.workLabel.isEmpty ? "正在准备…" : store.workLabel) : exportOnly ? "签名并导出" : updatesRetools ? "签名并更新 Retools" : "签名并安装").font(.body.weight(.semibold)).lineLimit(1)
                     }.foregroundStyle(canSign ? Color.white : Color.secondary).frame(maxWidth: .infinity, minHeight: 52).padding(.horizontal, 12)
                         .background { if canSign { RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.accentGradient).shadow(color: projectAccent.opacity(0.3), radius: 10, x: 0, y: 5) } else { RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(uiColor: .tertiarySystemFill)) } }
                 }.buttonStyle(.plain).disabled(busy || !canSign).accessibilityIdentifier("package.confirmSign")
@@ -409,7 +421,7 @@ struct PackageSigningView: View {
             let result = await store.signProject(packageID, options: options, install: install)
             localBusy = false
             // 进度面板会展示结果并提供分享；页面上保留一条完成记录。
-            if result { completed = install ? "签名及设备安装已完成" : "签名输出已生成" }
+            if result { completed = install ? (updatesRetools ? "更新已提交，请重新打开 Retools 确认" : "签名及设备安装已完成") : "签名输出已生成" }
         }
     }
     private func importFile(_ url: URL) {

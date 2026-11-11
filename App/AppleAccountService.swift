@@ -115,7 +115,7 @@ actor AppleAccountService {
     }
     /// 仅使用 Retools 内调用方选择的账号；不读取 Xcode 账号或本机签名身份。
     func hostCredentials(email: String, anisetteURL: String, teamID: String, udid: String, bundle: URL,
-                         includeAppGroup: Bool) throws -> [String: Credentials] {
+                         includeAppGroup: Bool, provisioningSource: URL? = nil) throws -> [String: Credentials] {
         let requests = try HostAppGroup.signingRequests(in: bundle, includeAppGroup: includeAppGroup)
         var materials: [String: Credentials] = [:]
         if includeAppGroup {
@@ -127,9 +127,10 @@ actor AppleAccountService {
                 materials[item.bundleID] = Credentials(p12: result.p12, profile: profile, password: result.password)
             }
         } else {
-            let extensions = (try? FileManager.default.contentsOfDirectory(at: bundle.appendingPathComponent("PlugIns"), includingPropertiesForKeys: nil)) ?? []
+            let source = provisioningSource ?? bundle
+            let extensions = (try? FileManager.default.contentsOfDirectory(at: source.appendingPathComponent("PlugIns"), includingPropertiesForKeys: nil)) ?? []
             for (index, item) in requests.enumerated() {
-                let target: URL? = index == 0 ? bundle : extensions
+                let target: URL? = index == 0 ? source : extensions
                     .first { (try? ArchiveService.metadata(at: $0)["CFBundleIdentifier"] as? String) == item.bundleID }
                 let portalID = target.flatMap { DevelopmentSigningManifest.provisioningIdentifier(in: $0, team: teamID) }
                 materials[item.bundleID] = try credentials(email: email, anisetteURL: anisetteURL, teamID: teamID, udid: udid,

@@ -335,6 +335,45 @@ actor WorkspaceService {
         if applicationID.hasSuffix("*"), target.hasPrefix(String(applicationID.dropLast())), target.count > applicationID.count - 1 { return nil }
         return identity
     }
+    /// Retools 更新使用宿主签名流程，不能复用普通 IPA 的团队后缀及移除扩展策略。
+    func prepareHostUpdate(_ packageID: UUID, options: PackageSigningOptions, report: SigningReporter? = nil) throws -> HostUpdatePlan? {
+        guard let package = state.packages.first(where: { $0.id == packageID }) else { throw WorkspaceFailure("找不到应用。") }
+        guard HostUpdate.isCandidate(package.bundleID) else { return nil }
+        guard !package.isEncrypted else { throw WorkspaceFailure("Retools 更新包不能是加密 IPA。") }
+        guard !options.removeEmbedded, options.format == .ipa, !options.removeURLSchemes, options.customEntitlements == nil else {
+            throw WorkspaceFailure("Retools 自身更新需要保留描述文件、URL Scheme 和宿主权限，请使用 IPA 格式并恢复这些选项。")
+        }
+        let (identity, _, _, _) = try credentials(selectedID: options.selectedIdentity(in: state.identities)?.id ?? options.identityID)
+        guard let bundleID = Bundle.main.bundleIdentifier else { throw WorkspaceFailure("无法读取当前 Retools 的安装标识。") }
+        var options = options; options.bundleID = bundleID
+        let temp = try temporaryDirectory()
+        do {
+            let app = try prepareSigningCopy(package, options: options, temp: temp, keepExtensions: true, report: report)
+            try HostUpdate.normalize(app)
+            return HostUpdatePlan(packageID: packageID, options: options, temp: temp, app: app, identity: identity,
+                                  requiresAppGroup: try HostAppGroup.readSignedIdentifier() != nil)
+        } catch { try? fm.removeItem(at: temp); throw error }
+    }
+    func discardHostUpdate(_ plan: HostUpdatePlan) { try? fm.removeItem(at: plan.temp) }
+    func finishHostUpdate(_ plan: HostUpdatePlan, materials: [String: AppleAccountService.Credentials], report: SigningReporter? = nil) throws -> WorkspaceState {
+        defer { try? fm.removeItem(at: plan.temp) }
+        let bundleID = try ArchiveService.metadata(at: plan.app)["CFBundleIdentifier"] as? String ?? ""
+        let requests = try HostAppGroup.signingRequests(in: plan.app, includeAppGroup: plan.requiresAppGroup)
+        for request in requests {
+            guard let material = materials[request.bundleID] else { throw WorkspaceFailure("缺少 \(request.name) 的描述文件，未生成不完整的更新包。") }
+            try HostAppGroup.validateProfile(material.profile, bundleID: request.bundleID, teamID: plan.identity.teamID, requireAppGroup: !request.appGroups.isEmpty)
+            let identity = try validatedIdentity(p12Data: material.p12, profileData: material.profile, password: material.password)
+            guard identity.fingerprint == plan.identity.fingerprint else { throw WorkspaceFailure("Apple ID 返回的证书与所选证书不一致，请重新准备开发签名并选择对应证书。") }
+        }
+        guard let main = materials[bundleID] else { throw WorkspaceFailure("缺少 Retools 的签名配置。") }
+        let identity = try validatedIdentity(p12Data: main.p12, profileData: main.profile, password: main.password)
+        report?.report(.sign, detail: "签名新版 Retools 与全部配对扩展")
+        let app = try prepareHostForRenewal(materials: materials, requiresAppGroup: plan.requiresAppGroup, source: plan.app)
+        defer { try? fm.removeItem(at: app.deletingLastPathComponent()) }
+        _ = try HostUpdate.validateInstall(app, teamID: identity.teamID, installedID: bundleID, requiresAppGroup: plan.requiresAppGroup)
+        return try commitSignedOutput(packageID: plan.packageID, app: app, temp: plan.temp, options: plan.options, persistOptions: true,
+                                      bundleID: bundleID, expiresAt: min(identity.expiresAt, identity.certificateExpiresAt), appleBundles: nil, report: report)
+    }
     func signProject(_ packageID: UUID, options: PackageSigningOptions, credentials: AppleAccountService.Credentials, expectedIdentity: SigningIdentity, report: SigningReporter? = nil) throws -> WorkspaceState {
         guard let package = state.packages.first(where: { $0.id == packageID }) else { throw WorkspaceFailure("找不到应用。") }
         let identity = try validatedIdentity(p12Data: credentials.p12, profileData: credentials.profile, password: credentials.password)
@@ -987,19 +1026,19 @@ actor WorkspaceService {
         }
         return size
     }
-    func prepareHostForRenewal(materials: [String: AppleAccountService.Credentials], renewalReceipt: String? = nil, requiresAppGroup: Bool = false) throws -> URL {
+    func prepareHostForRenewal(materials: [String: AppleAccountService.Credentials], renewalReceipt: String? = nil, requiresAppGroup: Bool = false, source: URL = Bundle.main.bundleURL) throws -> URL {
         let temp = try temporaryDirectory()
         do {
             var requiredGroup: String?
             if requiresAppGroup {
-                guard let bundleID = Bundle.main.bundleIdentifier, let main = materials[bundleID] else { throw WorkspaceFailure("缺少 Retools 的签名配置。") }
+                guard let bundleID = try ArchiveService.metadata(at: source)["CFBundleIdentifier"] as? String, let main = materials[bundleID] else { throw WorkspaceFailure("缺少 Retools 的签名配置。") }
                 let profile = try ProfileRefresh.parse(main.profile)
                 guard let team = profile.entitlements["com.apple.developer.team-identifier"] as? String else { throw WorkspaceFailure("描述文件缺少签名团队。") }
                 try HostAppGroup.validateProfile(main.profile, bundleID: bundleID, teamID: team, requireAppGroup: true)
                 requiredGroup = HostAppGroup.identifier(teamID: team)
             }
             let app = temp.appendingPathComponent("Retools.app")
-            try fm.copyItem(at: Bundle.main.bundleURL, to: app)
+            try fm.copyItem(at: source, to: app)
             if let renewalReceipt {
                 var info = try ArchiveService.metadata(at: app)
                 info["RetoolsRenewalReceipt"] = renewalReceipt

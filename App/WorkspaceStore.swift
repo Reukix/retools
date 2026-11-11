@@ -219,11 +219,24 @@ final class WorkspaceStore: ObservableObject {
         signingProgress = progress
         let reporter = SigningReporter { event in Task { @MainActor in progress.apply(event); self.workLabel = event.stage.title } }
         isWorking = true; workLabel = "正在签名并打包…"; signingIssue = nil
-        defer { isWorking = false; workLabel = ""; refreshStorage() }
+        let oldIdle = UIApplication.shared.isIdleTimerDisabled
+        if let package = state.packages.first(where: { $0.id == packageID }), HostUpdate.isCandidate(package.bundleID) { UIApplication.shared.isIdleTimerDisabled = true }
+        defer { isWorking = false; workLabel = ""; refreshStorage(); UIApplication.shared.isIdleTimerDisabled = oldIdle }
         do {
+            var hostMaterial: AppleAccountService.Credentials?
+            var hostAccountID: String?
             if install, options.removeEmbedded || options.format == .tipa { throw WorkspaceFailure("TIPA 或移除 Embedded 的输出请使用「仅签名并导出」，再交给对应安装工具。") }
             progress.apply(SigningEvent(stage: .credentials, detail: "检查项目配置与证书"))
-            if let identity = try await service.projectProvisioningIdentity(packageID, options: options) {
+            if let plan = try await service.prepareHostUpdate(packageID, options: options, report: reporter) {
+                do {
+                    let authorization = try await RenewalController.shared.projectHostCredentials(plan: plan) { message in
+                        self.workLabel = message
+                    }
+                    hostMaterial = authorization.materials[plan.options.bundleID]
+                    hostAccountID = authorization.accountID
+                    state = try await service.finishHostUpdate(plan, materials: authorization.materials, report: reporter)
+                } catch { await service.discardHostUpdate(plan); throw error }
+            } else if let identity = try await service.projectProvisioningIdentity(packageID, options: options) {
                 guard let package = state.packages.first(where: { $0.id == packageID }) else { throw WorkspaceFailure("找不到应用。") }
                 // 与 SideStore 一致：没有自定义 Bundle ID 时在后面加上团队 ID，避免与原作者已注册的 App ID 冲突。
                 var options = options
@@ -249,11 +262,11 @@ final class WorkspaceStore: ObservableObject {
             if let package = state.packages.first(where: { $0.id == packageID }) { progress.exportURL = exportURL(package) }
             if install, let package = state.packages.first(where: { $0.id == packageID }) {
                 progress.apply(SigningEvent(stage: .install, detail: "验证设备回环连接"))
-                try await RenewalController.shared.installSignedOutput(package, paths: paths) { message in
+                try await RenewalController.shared.installSignedOutput(package, paths: paths, hostMaterial: hostMaterial, hostAccountID: hostAccountID) { message in
                     self.workLabel = message; progress.apply(SigningEvent(stage: .install, detail: message))
                 }
             }
-            progress.succeed(install ? "签名并安装完成" : "签名完成，可以分享或导出")
+            progress.succeed(install ? (hostMaterial != nil ? "Retools 更新已提交，请重新打开应用确认" : "签名并安装完成") : "签名完成，可以分享或导出")
             return true
         } catch {
             await Task.yield()

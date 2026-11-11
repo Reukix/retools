@@ -185,10 +185,23 @@ final class RenewalController: ObservableObject {
         status = bundles.count > 1 ? "正在为 \(package.name) 及 \(bundles.count - 1) 个扩展注册 App ID 并获取描述文件…" : "正在为 \(package.name) 获取开发描述文件…"; progress(status)
         return try await service(for: owner.id).appCredentials(email: owner.email, anisetteURL: owner.anisetteURL, teamID: owner.teamID, udid: settings.deviceUDID, bundles: bundles)
     }
-    func installSignedOutput(_ package: AppPackage, paths: WorkspacePaths, progress: @escaping @MainActor (String) -> Void) async throws {
+    func projectHostCredentials(plan: HostUpdatePlan, progress: (String) -> Void) async throws -> (materials: [String: AppleAccountService.Credentials], accountID: String) {
+        guard !isWorking, !DevicePairingCoordinator.shared.isRunning else { throw WorkspaceFailure("请等待当前 Apple ID 或设备操作完成。") }
+        syncSelectedAccount()
+        guard plan.identity.teamID == RTNative.hostTeamIdentifier() else { throw WorkspaceFailure("Retools 自身更新需要选择与当前安装相同团队的 Apple ID 证书，才能保留应用数据。") }
+        let owner = try ProjectSigningAccount.resolve(identity: plan.identity, packageID: plan.packageID, hostIdentityID: store?.state.hostIdentityID, settings: settings)
+        guard !settings.deviceUDID.isEmpty else { throw WorkspaceFailure("请先配对这台 iPhone，以获取自身更新所需的开发描述文件。") }
+        isWorking = true
+        defer { isWorking = false; status = "" }
+        status = "正在为新版 Retools 和配对扩展获取开发描述文件…"; progress(status)
+        let materials = try await service(for: owner.id).hostCredentials(email: owner.email, anisetteURL: owner.anisetteURL,
+            teamID: owner.teamID, udid: settings.deviceUDID, bundle: plan.app, includeAppGroup: plan.requiresAppGroup, provisioningSource: Bundle.main.bundleURL)
+        return (materials, owner.id)
+    }
+    func installSignedOutput(_ package: AppPackage, paths: WorkspacePaths, hostMaterial: AppleAccountService.Credentials? = nil,
+                             hostAccountID: String? = nil, progress: @escaping @MainActor (String) -> Void) async throws {
         guard !isWorking, !DevicePairingCoordinator.shared.isRunning else { throw WorkspaceFailure("续签或配对正在进行，请稍后安装。") }
         guard let file = package.signedFile, let bundleID = package.signedBundleID else { throw WorkspaceFailure("请先完成签名。") }
-        guard bundleID != Bundle.main.bundleIdentifier else { throw WorkspaceFailure("Retools 自身请在 Apple ID 自动续签中更新，以保留配对扩展和当前签名资料。") }
         guard settings.hasPairing else { throw WorkspaceFailure("请先在设置中配对这台 iPhone，并开启外部代理回环。签名输出已保留，可以先导出。") }
         guard (file as NSString).pathExtension.lowercased() == "ipa" else { throw WorkspaceFailure("当前格式请导出后交给对应安装工具。") }
         let temp = paths.staging.appendingPathComponent(UUID().uuidString)
@@ -197,9 +210,25 @@ final class RenewalController: ObservableObject {
         progress("正在准备安装目录…")
         let app = try ArchiveService.unpack(paths.exports.appendingPathComponent(file), to: temp.appendingPathComponent("Install"))
         guard FileManager.default.fileExists(atPath: app.appendingPathComponent("embedded.mobileprovision").path) else { throw WorkspaceFailure("当前输出没有描述文件，请导出后交给对应安装工具。") }
+        isWorking = true
+        defer { isWorking = false }
         progress("正在验证设备回环连接…")
         let udid = try await device.connect(host: settings.hostIP, remotePort: settings.remotePort, expectedUDID: settings.deviceUDID)
         settings.deviceUDID = udid
+        if bundleID == Bundle.main.bundleIdentifier {
+            guard let hostMaterial, let hostAccountID, let store,
+                  let owner = settings.accounts.first(where: { $0.id == hostAccountID && $0.isReady }),
+                  owner.teamID == RTNative.hostTeamIdentifier(),
+                  try Data(contentsOf: app.appendingPathComponent("embedded.mobileprovision")) == hostMaterial.profile else {
+                throw WorkspaceFailure("请重新使用 Apple ID 签名这份 Retools IPA，再提交自身更新。")
+            }
+            let requiredGroup = try HostAppGroup.readSignedIdentifier()
+            _ = try HostUpdate.validateInstall(app, teamID: owner.teamID, installedID: bundleID, requiresAppGroup: requiredGroup != nil)
+            if let requiredGroup, HostAppGroup.signedIdentifier(in: app) != requiredGroup { throw WorkspaceFailure("更新包没有保留当前 App Group，未替换 Retools。") }
+            progress("自身更新即将提交，应用可能退出；完成后请重新打开 Retools…")
+            try await submitHostInstall(app: app, main: hostMaterial, accountID: owner.id, store: store)
+            return
+        }
         let key = package.id.uuidString
         progress("正在检查安装条件…")
         // 读不到设备上的应用或描述文件时只跳过对应检查，不阻止安装。
@@ -311,11 +340,12 @@ final class RenewalController: ObservableObject {
         }
     }
     func save() {
-        do {
-            syncSelectedAccount(); try JSONEncoder().encode(settings).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]); schedule()
-            if let store { ExpiryPublisher.publish(store: store, renewal: self) }
-        }
+        do { try persistSettings() }
         catch { errorMessage = error.localizedDescription }
+    }
+    private func persistSettings() throws {
+        syncSelectedAccount(); try JSONEncoder().encode(settings).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]); schedule()
+        if let store { ExpiryPublisher.publish(store: store, renewal: self) }
     }
     private func service(for email: String) -> AppleAccountService {
         if let service = accountServices[email] { return service }
@@ -862,26 +892,46 @@ final class RenewalController: ObservableObject {
         let includeAppGroup = try HostAppGroup.readSignedIdentifier() != nil
         let materials = try await service.hostCredentials(email: owner.email, anisetteURL: owner.anisetteURL,
             teamID: owner.teamID, udid: udid, bundle: Bundle.main.bundleURL, includeAppGroup: includeAppGroup)
-        guard let main = materials[bundleID], let info = try PropertyListSerialization.propertyList(from: RTNative.profilePayload(main.profile), format: nil) as? [String: Any],
-              let profileID = info["UUID"] as? String else { throw WorkspaceFailure("无法确认新的自身描述文件。") }
+        guard let main = materials[bundleID], let info = try PropertyListSerialization.propertyList(from: RTNative.profilePayload(main.profile), format: nil) as? [String: Any] else { throw WorkspaceFailure("无法确认新的自身描述文件。") }
         guard (info["Entitlements"] as? [String: Any])?["get-task-allow"] as? Bool == true else { throw WorkspaceFailure("Apple 返回的描述文件未授权容器所需的调试权限，未更新 Retools。") }
         if try await refreshHostProfilesOnly(materials: materials, bundleID: bundleID, extensions: extensions, owner: owner, store: store) { return }
         let receipt = UUID().uuidString
         let app = try await store.service.prepareHostForRenewal(materials: materials, renewalReceipt: receipt, requiresAppGroup: includeAppGroup)
         defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
+        try await submitHostInstall(app: app, main: main, accountID: owner.id, store: store, submitted: submitted)
+    }
+    /// 安装会终止当前进程；先落盘凭据与回执，下一次启动才确认自身更新成功。
+    private func submitHostInstall(app: URL, main: AppleAccountService.Credentials, accountID: String, store: WorkspaceStore, submitted: (() -> Void)? = nil) async throws {
+        if settings.pendingHostProfile != nil, let date = settings.pendingHostDate, Date().timeIntervalSince(date) < 600 {
+            throw WorkspaceFailure("上次自身安装仍待确认，请稍后重新打开 Retools。")
+        }
+        let info = try ArchiveService.metadata(at: app)
+        guard let bundleID = info["CFBundleIdentifier"] as? String, bundleID == Bundle.main.bundleIdentifier,
+              let receipt = info["RetoolsRenewalReceipt"] as? String else { throw WorkspaceFailure("自身更新包缺少安装回执。") }
+        let profileID = try ProfileRefresh.parse(main.profile).uuid
         try Task.checkCancellation()
-        settings.pendingHostProfile = profileID; settings.pendingHostDate = Date(); settings.pendingHostReceipt = receipt
-        settings.lastResult = "自身续签已提交，等待下次启动确认"; save()
-        submitted?()
         let previousHost = store.state.hostIdentityID
-        store.state = try await store.service.importHostIdentity(main)
-        do { try await device.install(app: app, bundleID: bundleID) }
+        let previousAccount = settings.hostAccountID
+        var imported = false
+        do {
+            store.state = try await store.service.importHostIdentity(main); imported = true
+            settings.hostAccountID = accountID
+            settings.pendingHostProfile = profileID; settings.pendingHostDate = Date(); settings.pendingHostReceipt = receipt
+            settings.lastResult = "自身更新已提交，等待下次启动确认"; try persistSettings()
+            submitted?()
+            try await device.install(app: app, bundleID: bundleID)
+        }
         catch {
             // A renewed revision can replace the old, equivalent record. Keep
             // its valid replacement if installation failed after that commit.
-            let fallback = previousHost.flatMap { old in store.state.identities.contains { $0.id == old } ? old : store.state.hostIdentityID }
-            store.state = try await store.service.selectHostIdentity(fallback)
-            settings.pendingHostProfile = nil; settings.pendingHostDate = nil; settings.pendingHostReceipt = nil; save()
+            if imported {
+                let fallback = previousHost.flatMap { old in store.state.identities.contains { $0.id == old } ? old : store.state.hostIdentityID }
+                do { store.state = try await store.service.selectHostIdentity(fallback) }
+                catch { AuthDiagnostics.record(stage: "自身更新", message: "恢复原宿主证书选择失败：" + error.localizedDescription) }
+            }
+            settings.hostAccountID = previousAccount
+            settings.pendingHostProfile = nil; settings.pendingHostDate = nil; settings.pendingHostReceipt = nil
+            settings.lastResult = "自身更新未完成：" + error.localizedDescription; save()
             throw error
         }
     }

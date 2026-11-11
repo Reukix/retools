@@ -1,6 +1,85 @@
 import Foundation
 import RetoolsNative
 
+struct HostUpdatePlan: Sendable {
+    let packageID: UUID
+    let options: PackageSigningOptions
+    let temp: URL
+    let app: URL
+    let identity: SigningIdentity
+    let requiresAppGroup: Bool
+}
+
+enum HostUpdate {
+    static func isCandidate(_ identifier: String, installedID: String? = Bundle.main.bundleIdentifier) -> Bool {
+        identifier == installedID || identifier == "dev.retools.ios" || identifier.hasPrefix("dev.retools.ios.")
+    }
+
+    /// 只修改待安装副本；同一 Bundle ID 和团队才能覆盖原安装并保留私有沙盒。
+    static func normalize(_ app: URL, installed: URL = Bundle.main.bundleURL) throws {
+        var info = try ArchiveService.metadata(at: app)
+        let current = try ArchiveService.metadata(at: installed)
+        guard info["RetoolsPrivateSandbox"] as? Bool == true,
+              info[HostAppGroup.metadataKey] as? String == HostAppGroup.baseIdentifier,
+              info["CFBundleExecutable"] as? String == current["CFBundleExecutable"] as? String,
+              let originalID = info["CFBundleIdentifier"] as? String,
+              let installedID = current["CFBundleIdentifier"] as? String else {
+            throw WorkspaceFailure("这个 IPA 不是完整的 Retools 更新包。")
+        }
+        try SigningProjectService.renameExtensions(in: app, from: originalID, to: installedID)
+        let plugins = app.appendingPathComponent("PlugIns")
+        let existing = installed.appendingPathComponent("PlugIns")
+        let pairing = "RetoolsPairingWidget.appex"
+        if FileManager.default.fileExists(atPath: existing.appendingPathComponent(pairing).path),
+           !FileManager.default.fileExists(atPath: plugins.appendingPathComponent(pairing).path) {
+            throw WorkspaceFailure("更新包缺少 Retools 配对扩展，请使用完整 IPA。")
+        }
+        for item in (try? FileManager.default.contentsOfDirectory(at: plugins, includingPropertiesForKeys: nil)) ?? [] where item.pathExtension == "appex" {
+            var metadata = try ArchiveService.metadata(at: item)
+            if let old = try? ArchiveService.metadata(at: existing.appendingPathComponent(item.lastPathComponent)),
+               old["CFBundleExecutable"] as? String == metadata["CFBundleExecutable"] as? String,
+               let id = old["CFBundleIdentifier"] as? String, id.hasPrefix(installedID + ".") {
+                metadata["CFBundleIdentifier"] = id
+                try PropertyListSerialization.data(fromPropertyList: metadata, format: .binary, options: 0).write(to: item.appendingPathComponent("Info.plist"), options: .atomic)
+            }
+            guard let id = metadata["CFBundleIdentifier"] as? String, id.hasPrefix(installedID + ".") else {
+                throw WorkspaceFailure("Retools 更新包中的扩展标识不匹配。")
+            }
+        }
+        info["CFBundleIdentifier"] = installedID
+        // 后台任务沿用更新包的声明，不套用普通应用的团队后缀改写。
+        info["RetoolsRenewalReceipt"] = UUID().uuidString
+        try PropertyListSerialization.data(fromPropertyList: info, format: .binary, options: 0).write(to: app.appendingPathComponent("Info.plist"), options: .atomic)
+    }
+
+    static func validateInstall(_ app: URL, teamID: String, installedID: String, requiresAppGroup: Bool) throws -> (profile: String, receipt: String) {
+        let info = try ArchiveService.metadata(at: app)
+        guard info["CFBundleIdentifier"] as? String == installedID,
+              info["RetoolsPrivateSandbox"] as? Bool == true,
+              let receipt = info["RetoolsRenewalReceipt"] as? String, !receipt.isEmpty else {
+            throw WorkspaceFailure("请重新签名这份 Retools IPA，以准备可确认结果的自身更新。")
+        }
+        for (index, request) in try HostAppGroup.signingRequests(in: app, includeAppGroup: requiresAppGroup).enumerated() {
+            let bundle: URL
+            if index == 0 { bundle = app }
+            else {
+                let items = try FileManager.default.contentsOfDirectory(at: app.appendingPathComponent("PlugIns"), includingPropertiesForKeys: nil)
+                guard let found = items.first(where: { (try? ArchiveService.metadata(at: $0)["CFBundleIdentifier"] as? String) == request.bundleID }) else { throw WorkspaceFailure("找不到 Retools 扩展。") }
+                bundle = found
+            }
+            let data = try Data(contentsOf: bundle.appendingPathComponent("embedded.mobileprovision"))
+            try HostAppGroup.validateProfile(data, bundleID: request.bundleID, teamID: teamID, requireAppGroup: !request.appGroups.isEmpty)
+            let metadata = try ArchiveService.metadata(at: bundle)
+            guard let executable = metadata["CFBundleExecutable"] as? String,
+                  ProfileRefresh.blocker(profile: try ProfileRefresh.parse(data), executable: bundle.appendingPathComponent(executable), currentExpiry: nil) == nil else {
+                throw WorkspaceFailure("Retools 或扩展的签名与描述文件不匹配，未提交更新。")
+            }
+        }
+        if requiresAppGroup, HostAppGroup.signedIdentifier(in: app) == nil { throw WorkspaceFailure("更新包没有保留当前 App Group。") }
+        return (try ProfileRefresh.parse(Data(contentsOf: app.appendingPathComponent("embedded.mobileprovision"))).uuid, receipt)
+    }
+}
+
 /// 文件工具专用组；应用库、凭据和容器数据仍保存在宿主的私有沙盒。
 enum HostAppGroup {
     static let entitlement = "com.apple.security.application-groups"
