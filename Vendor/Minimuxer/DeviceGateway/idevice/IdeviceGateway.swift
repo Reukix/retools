@@ -10,6 +10,11 @@ import Foundation
 import IDevice
 import MinimuxerCommon
 
+public enum StoreArchiveInstallProgress: Sendable {
+    case uploading(completed: UInt64, total: UInt64)
+    case installing
+}
+
 internal final class IdeviceGatewayError: DeviceGatewayError, @unchecked Sendable {
     override var errorDescription: String? {
         switch code {
@@ -837,6 +842,82 @@ public final class IdeviceGateway: BaseDeviceGateway, DeviceGatewayAPI, @uncheck
                 }
             }
         }
+    }
+
+    // Retools: stream the original Store archive, preserving its purchase metadata and SINF.
+    // Uses Upgrade for existing apps; never uninstalls on an installation error.
+    private func syncInstallStoreArchive(file: URL, bundleId: String, replacing: Bool,
+                                         progress: @Sendable (StoreArchiveInstallProgress) -> Void) throws {
+        try verifyInitialized()
+        guard !bundleId.isEmpty, bundleId.utf8.count < 256,
+              bundleId.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }) else {
+            throw AppBundleStagingPlan.Failure(message: "应用标识无效。")
+        }
+        let remote = "PublicStaging/RetoolsStore-\(UUID().uuidString).ipa"
+        func removeStagedArchive() throws {
+            try performWithEitherService(connectRP: afc_client_connect_rsd, connectLockdown: afc_client_connect,
+                cleanup: afc_client_free, serviceName: "AFC client") { client in
+                if let error = remote.withCString({ afc_remove_path(client, $0) }) { idevice_error_free(error) }
+            }
+        }
+        defer { try? removeStagedArchive() }
+        try performWithEitherService(connectRP: afc_client_connect_rsd, connectLockdown: afc_client_connect,
+            cleanup: afc_client_free, serviceName: "AFC client") { client in
+            let input = try FileHandle(forReadingFrom: file)
+            defer { try? input.close() }
+            let expected = try input.seekToEnd()
+            guard expected > 0 else { throw AppBundleStagingPlan.Failure(message: "安装包为空。") }
+            progress(.uploading(completed: 0, total: expected))
+            try input.seek(toOffset: 0)
+            var handle: OpaquePointer?
+            if let error = remote.withCString({ afc_file_open(client, $0, AfcFopenMode(rawValue: 4), &handle) }) {
+                defer { idevice_error_free(error) }
+                throw IdeviceGatewayError(.serviceError, reason: self.getErrorMessage(from: error))
+            }
+            defer { if let error = afc_file_close(handle) { idevice_error_free(error) } }
+            var written: UInt64 = 0
+            while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+                try chunk.withUnsafeBytes { bytes in
+                    if let error = afc_file_write(handle, bytes.bindMemory(to: UInt8.self).baseAddress!, chunk.count) {
+                        defer { idevice_error_free(error) }
+                        throw IdeviceGatewayError(.serviceError, reason: self.getErrorMessage(from: error))
+                    }
+                }
+                written += UInt64(chunk.count)
+                progress(.uploading(completed: written, total: expected))
+            }
+            guard written == expected else { throw AppBundleStagingPlan.Failure(message: "安装包在上传期间发生变化，已停止安装。") }
+            var remoteInfo = AfcFileInfo()
+            if let error = remote.withCString({ afc_get_file_info(client, $0, &remoteInfo) }) {
+                defer { idevice_error_free(error) }
+                throw IdeviceGatewayError(.serviceError, reason: self.getErrorMessage(from: error))
+            }
+            defer { afc_file_info_free(&remoteInfo) }
+            guard remoteInfo.size == expected else { throw AppBundleStagingPlan.Failure(message: "设备未收到完整安装包，已停止安装。") }
+        }
+        progress(.installing)
+        try performWithEitherService(connectRP: installation_proxy_connect_rsd, connectLockdown: installation_proxy_connect,
+            cleanup: installation_proxy_client_free, serviceName: "instproxy") { client in
+            let options = plist_new_dict()
+            defer { plist_free(options) }
+            bundleId.withCString { plist_dict_set_item(options, "CFBundleIdentifier", plist_new_string($0)) }
+            let error = remote.withCString { path in
+                replacing ? installation_proxy_upgrade(client, path, options) : installation_proxy_install(client, path, options)
+            }
+            if let error {
+                defer { idevice_error_free(error) }
+                throw IdeviceGatewayError(.serviceError, reason: self.getErrorMessage(from: error))
+            }
+        }
+    }
+
+    public func installStoreArchive(file: URL, bundleId: String, replacing: Bool) async throws {
+        try await installStoreArchive(file: file, bundleId: bundleId, replacing: replacing, progress: { _ in })
+    }
+
+    public func installStoreArchive(file: URL, bundleId: String, replacing: Bool,
+                                    progress: @escaping @Sendable (StoreArchiveInstallProgress) -> Void) async throws {
+        try await withFFIDispatch { try self.syncInstallStoreArchive(file: file, bundleId: bundleId, replacing: replacing, progress: progress) }
     }
 
     private func syncInstallIpa(bundleId: String) throws {

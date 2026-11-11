@@ -19,10 +19,19 @@ actor SampleDeviceToolsBackend: DeviceToolsBackend {
     private let processReadingBehavior: ProcessReadingBehavior
     private var heldUsage: CheckedContinuation<Void, Never>?
     private var failProcessReads = false
+    private let profilesUnavailable: Bool
+    private(set) var serviceCalls: [String] = []
     private(set) var usageStarted = false
+    enum SizeReadingBehavior { case normal, held, delayed, failed, missing }
+    private var sizeReadingBehavior: SizeReadingBehavior
+    private var heldSizes: CheckedContinuation<Void, Never>?
+    private(set) var sizeReadingStarted = false
 
-    init(now: Date = Date(), terminationBehavior: TerminationBehavior = .exit, processReadingBehavior: ProcessReadingBehavior = .normal) {
+    init(now: Date = Date(), terminationBehavior: TerminationBehavior = .exit, processReadingBehavior: ProcessReadingBehavior = .normal, profilesUnavailable: Bool = false, sizeReadingBehavior: SizeReadingBehavior = .normal) {
+        self.profilesUnavailable = profilesUnavailable
+        self.sizeReadingBehavior = sizeReadingBehavior
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--app-review-slow-sizes") { self.sizeReadingBehavior = .delayed }
         self.terminationBehavior = ProcessInfo.processInfo.arguments.contains("--process-review-deny-termination") ? .reject : terminationBehavior
         self.processReadingBehavior = ProcessInfo.processInfo.arguments.contains("--process-review-slow-usage") ? .delayedUsage : processReadingBehavior
         #else
@@ -70,8 +79,8 @@ actor SampleDeviceToolsBackend: DeviceToolsBackend {
 
     func reset() {}
     private var developerImageMounted = false
-    func isDeveloperImageMounted() async throws -> Bool { developerImageMounted }
-    func mountDeveloperImage(_ files: DeveloperDiskImage.Files) async throws { developerImageMounted = true }
+    func isDeveloperImageMounted() async throws -> Bool { serviceCalls.append("imageStatus"); return developerImageMounted }
+    func mountDeveloperImage(_ files: DeveloperDiskImage.Files) async throws { serviceCalls.append("mountImage"); developerImageMounted = true }
 
     private var sampleProcesses: [DeviceProcessInfo] = [
         DeviceProcessInfo(pid: 101, name: "UTM", appName: "/var/containers/Bundle/Application/A1/UTM.app/UTM", isApplication: true, cpu: 42.5, memory: 1_850_000_000),
@@ -140,21 +149,42 @@ actor SampleDeviceToolsBackend: DeviceToolsBackend {
     }
     func connect(host: String, port: UInt16, udid: String) async throws {}
     func appSizes(type: String) async throws -> [Data] {
-        apps.values.compactMap { app -> Data? in
+        serviceCalls.append("sizes:" + type); sizeReadingStarted = true
+        if sizeReadingBehavior == .held { await withCheckedContinuation { heldSizes = $0 } }
+        if sizeReadingBehavior == .delayed { try await Task.sleep(for: .seconds(8)) }
+        if sizeReadingBehavior == .failed { throw WorkspaceFailure("应用大小服务暂时不可用") }
+        if sizeReadingBehavior == .missing { return [try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.utmapp.UTM"], format: .xml, options: 0)] }
+        let system: [[String: Any]] = [
+            ["CFBundleIdentifier": "com.apple.mobilesafari", "StaticDiskUsage": 120_000_000, "DynamicDiskUsage": 20_000_000],
+            ["CFBundleIdentifier": "com.apple.weather", "StaticDiskUsage": 40_000_000, "DynamicDiskUsage": 0]
+        ]
+        let source = type == "System" ? system : Array(apps.values) + (type == "Any" ? system : [])
+        return source.compactMap { app -> Data? in
             let sizes: [String: Any] = ["CFBundleIdentifier": app["CFBundleIdentifier"] ?? "", "StaticDiskUsage": app["StaticDiskUsage"] ?? 0,
                                         "DynamicDiskUsage": app["DynamicDiskUsage"] ?? 0]
             return try? PropertyListSerialization.data(fromPropertyList: sizes, format: .xml, options: 0)
         }
     }
+    func releaseAppSizes() { heldSizes?.resume(); heldSizes = nil }
+    func setSizeReadingBehavior(_ behavior: SizeReadingBehavior) { sizeReadingBehavior = behavior }
     func installedApps(type: String) async throws -> [Data] {
+        serviceCalls.append("apps:" + type)
         let system: [[String: Any]] = [
             ["CFBundleIdentifier": "com.apple.mobilesafari", "CFBundleDisplayName": "Safari 浏览器", "ApplicationType": "System", "CFBundleShortVersionString": "27.0"],
             ["CFBundleIdentifier": "com.apple.weather", "CFBundleDisplayName": "天气", "ApplicationType": "System", "CFBundleShortVersionString": "27.0"],
         ]
         let source = type == "System" ? system : Array(apps.values)
-        return source.compactMap { try? PropertyListSerialization.data(fromPropertyList: $0, format: .xml, options: 0) }
+        return source.compactMap { item in
+            var quick = item
+            quick.removeValue(forKey: "StaticDiskUsage"); quick.removeValue(forKey: "DynamicDiskUsage")
+            return try? PropertyListSerialization.data(fromPropertyList: quick, format: .xml, options: 0)
+        }
     }
-    func provisioningProfiles() async throws -> [Data] { Array(profiles.values) }
+    func provisioningProfiles() async throws -> [Data] {
+        serviceCalls.append("profiles")
+        if profilesUnavailable { throw WorkspaceFailure("描述文件服务不可用") }
+        return Array(profiles.values)
+    }
     func removeProfile(uuid: String) async throws { profiles[uuid] = nil }
     func installProfile(_ data: Data) async throws {
         guard let profile = DeviceProfile.parse(data) else { throw WorkspaceFailure("描述文件无效。") }
@@ -162,6 +192,7 @@ actor SampleDeviceToolsBackend: DeviceToolsBackend {
     }
     func uninstall(bundleID: String) async throws { apps[bundleID] = nil }
     func lockdownValues(domain: String?) async throws -> Data {
+        serviceCalls.append("info:" + (domain ?? "general"))
         let values: [String: Any]
         switch domain {
         case "com.apple.disk_usage": values = ["TotalDiskCapacity": 256_000_000_000 as Int64, "AmountDataAvailable": 61_400_000_000 as Int64, "TotalDataAvailable": 73_900_000_000 as Int64]

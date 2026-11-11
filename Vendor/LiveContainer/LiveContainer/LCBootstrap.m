@@ -653,7 +653,8 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         return appError;
     }
 
-    NSString *pluginError = RetoolsLoadGuestPlugins(bundlePath, guestAppInfo);
+    NSString *pluginError = [lcUserDefaults stringForKey:@"RetoolsGuestPluginError"];
+    [lcUserDefaults removeObjectForKey:@"RetoolsGuestPluginError"];
     if (pluginError) { *path = oldPath; return pluginError; }
     RetoolsInstallGuestControls(selectedApp, selectedContainer);
 

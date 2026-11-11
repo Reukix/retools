@@ -7,10 +7,15 @@ final class DecryptionController: ObservableObject {
     @Published var busy = false
     @Published var status = "选择一个加密 IPA"
     @Published var error: String?
+    @Published var sourceIssue: String?
     @Published var result: URL?
     let paths: WorkspacePaths
     var root: URL { paths.support.appendingPathComponent("Decryption") }
     var folder: URL? { job.map { root.appendingPathComponent($0.manifest.id.uuidString) } }
+    var unsignedHelperIPA: URL? {
+        guard let file = folder?.appendingPathComponent("DecryptHelper.ipa"), FileManager.default.fileExists(atPath: file.path) else { return nil }
+        return file
+    }
     var helperIPA: URL? {
         guard let folder else { return nil }
         let signed = folder.appendingPathComponent("DecryptHelper-signed.ipa")
@@ -20,12 +25,20 @@ final class DecryptionController: ObservableObject {
     }
     init(paths: WorkspacePaths = WorkspacePaths()) {
         self.paths = paths
+        reload()
+    }
+    func reload() {
+        guard !busy else { return }
+        job = nil; result = nil; sourceIssue = nil; status = "选择一个加密 IPA"
         if let value = try? String(contentsOf: root.appendingPathComponent("Current"), encoding: .utf8), let id = UUID(uuidString: value),
            let data = try? Data(contentsOf: root.appendingPathComponent(id.uuidString+"/Job.json")),
            let saved = try? JSONDecoder().decode(PreparedDecryption.self, from: data), saved.manifest.id == id,
            (try? saved.manifest.validate()) != nil {
             job = saved; status = saved.installed ? "助手已安装，打开助手后开始砸壳" : "助手已准备好"
+            let archive = root.appendingPathComponent(id.uuidString + "/Result.ipa")
+            if FileManager.default.fileExists(atPath: archive.path) { result = archive }
         }
+        if job == nil { result = try? DecryptionCache.savedResults(paths: paths).first }
     }
     private func save() throws {
         guard let job, let folder else { return }
@@ -40,8 +53,25 @@ final class DecryptionController: ObservableObject {
         busy = false; store.isWorking = false; store.workLabel = ""
         UIApplication.shared.isIdleTimerDisabled = false
     }
+    func packageHelper(store: WorkspaceStore, renewal: RenewalController) async {
+        guard let job, let folder else { return }
+        do { try begin(store: store, renewal: renewal, message: "正在生成未签名助手…") }
+        catch { self.error = error.localizedDescription; return }
+        defer { end(store: store) }
+        do {
+            let template = try DecryptionPreparation.templateURL(), root = root
+            try await Task.detached(priority: .userInitiated) {
+                try DecryptionPreparation.refreshTemplate(job, template: template, root: root)
+                let app = folder.appendingPathComponent("Helper/Payload/RetoolsDecryptHelper.app")
+                try FairPlayFiles.verifyOriginals(job.manifest, in: app.appendingPathComponent(FairPlayManifest.resourceDirectory + "/Target"))
+                try ArchiveService.pack(app: app, to: folder.appendingPathComponent("DecryptHelper.ipa"))
+            }.value
+            status = "未签名助手已生成，可以导出后使用其他工具安装"
+        } catch { self.error = error.localizedDescription }
+    }
     func prepare(source: URL, store: WorkspaceStore, renewal: RenewalController) async {
         do { try begin(store: store, renewal: renewal, message: "正在检查 IPA 和商店许可…") } catch { self.error = error.localizedDescription; return }
+        sourceIssue = nil
         defer { end(store: store) }
         defer {
             let picked = FileManager.default.temporaryDirectory.appendingPathComponent("Picked").path+"/"
@@ -51,7 +81,34 @@ final class DecryptionController: ObservableObject {
             let template = try DecryptionPreparation.templateURL(), root = root
             let prepared = try await Task.detached(priority: .userInitiated) { try DecryptionPreparation.prepare(source: source, template: template, root: root) }.value
             job = prepared; result = nil; status = "助手已准备好"
-        } catch { self.error = error.localizedDescription; status = job == nil ? "选择一个加密 IPA" : "保留上一次准备好的助手" }
+        } catch { sourceIssue = error.localizedDescription; status = job == nil ? "来源检查未完成" : "保留上一次准备好的助手" }
+    }
+
+    func prepareInstalled(_ app: DeviceInstalledApp, store: WorkspaceStore, renewal: RenewalController) async {
+        do { try begin(store: store, renewal: renewal, message: "正在读取「\(app.name)」的安装包…") }
+        catch { self.error = error.localizedDescription; return }
+        sourceIssue = nil
+        defer { end(store: store) }
+        let staging = paths.staging.appendingPathComponent("InstalledSource-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        do {
+            guard let group = HostAppGroup.signedIdentifier() else { throw WorkspaceFailure("当前签名缺少文件工具专用 App Group，可从商店获取原始包。") }
+            let source = try InstalledDecryptionSource.bundleRoot(app.path)
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            let snapshot = staging.appendingPathComponent(source.lastPathComponent)
+            try await LocalFileAccessService.shared.snapshotInstalledApp(app, to: snapshot, group: group)
+            status = "正在校验安装包与许可…"
+            let archive = staging.appendingPathComponent("Installed.ipa"), root = root
+            let template = try DecryptionPreparation.templateURL()
+            let prepared = try await Task.detached(priority: .userInitiated) {
+                try ArchiveService.pack(app: snapshot, to: archive)
+                return try DecryptionPreparation.prepare(source: archive, template: template, root: root)
+            }.value
+            job = prepared; result = nil; status = "已从本机应用准备好助手"
+        } catch {
+            sourceIssue = "无法从已安装应用准备助手：" + error.localizedDescription
+            status = job == nil ? "本机安装包未能读取，可从商店获取" : "保留上一次准备好的助手"
+        }
     }
     func sign(identity: SigningIdentity, install: Bool, store: WorkspaceStore, renewal: RenewalController) async {
         guard let job else { return }

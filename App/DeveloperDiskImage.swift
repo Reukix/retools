@@ -10,7 +10,7 @@ enum DeveloperDiskImage {
     static let approximateSize: Int64 = 16_500_000
 
     static let autoMountKey = "RetoolsAutoMountDeveloperImage"
-    /// 需要时（定位模拟、进程管理、容器 JIT、启动 Retools）自动挂载，默认开启。
+    /// 需要时（定位模拟、进程占用、应用启动、容器 JIT）自动挂载，默认开启。
     static var autoMountEnabled: Bool { UserDefaults.standard.object(forKey: autoMountKey) as? Bool ?? true }
 
     static var folder: URL { WorkspacePaths().support.appendingPathComponent("DeveloperDiskImage", isDirectory: true) }

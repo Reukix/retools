@@ -32,7 +32,7 @@ struct RenewalView: View {
                 }.accessibilityIdentifier("renewal.connection")
             } footer: { Text("设备配对、外部代理回环与 Anisette 验证服务。") }
             Section {
-                Text(renewal.backgroundStatus).font(.footnote).foregroundStyle(.secondary)
+                Text(renewal.backgroundStatus).font(.footnote).foregroundStyle(Color.secondary)
                 if let date = settings.lastAttempt { InfoRow(title: "最近尝试", value: date.formatted(date: .abbreviated, time: .shortened)) }
                 if let date = settings.lastSuccess { InfoRow(title: "最近成功", value: date.formatted(date: .abbreviated, time: .shortened)) }
                 if settings.failureCount > 0 { InfoRow(title: "连续失败", value: "\(settings.failureCount) 次") }
@@ -40,7 +40,7 @@ struct RenewalView: View {
             } header: { Text("执行记录") }
         }
         .scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle("Apple ID 自动续签").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .navigationTitle("Apple ID 自动续签").navigationBarTitleDisplayMode(.inline)
         .disabled(renewal.isWorking && broker.prompt == nil)
         .task { await renewal.verifyConnectionIfNeeded() }
         .onDisappear { renewal.save() }
@@ -68,7 +68,7 @@ struct RenewalView: View {
                 BrandMark(size: 52)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(hostAccount?.email ?? "未登录 Apple ID").font(.headline).lineLimit(1).truncationMode(.middle)
-                    Text(teamLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(teamLine).font(.caption).foregroundStyle(Color.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 6)
                 ExpiryBadge(expiry: renewal.hostExpiry)
@@ -91,7 +91,7 @@ struct RenewalView: View {
                     .background(canRenew || renewal.isWorking ? AnyShapeStyle(Palette.accentGradient) : AnyShapeStyle(Color.secondary.opacity(0.35)), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             }.buttonStyle(.plain).disabled(!canRenew || renewal.isWorking).accessibilityIdentifier("renewal.renewNow")
             if !canRenew, !renewal.isWorking {
-                Text(missingHint).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(missingHint).font(.caption).foregroundStyle(Color.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }.workspaceCard(padding: 18).accessibilityElement(children: .contain)
     }
@@ -121,7 +121,7 @@ struct RenewalView: View {
     private func statusLine(_ symbol: String, title: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: symbol).font(.caption).foregroundStyle(Palette.accent).frame(width: 18)
-            Text(title).font(.subheadline).foregroundStyle(.secondary)
+            Text(title).font(.subheadline).foregroundStyle(Color.secondary)
             Spacer(minLength: 12)
             Text(value).font(.subheadline).multilineTextAlignment(.trailing).lineLimit(2)
         }
@@ -144,14 +144,14 @@ struct RenewalView: View {
             Toggle(isOn: $expiryNotifications) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("到期与续签通知")
-                    Text("到期前 1 天和到期时提醒；后台续签完成或失败时通知").font(.caption).foregroundStyle(.secondary)
+                    Text("到期前 1 天和到期时提醒；后台续签完成或失败时通知").font(.caption).foregroundStyle(Color.secondary)
                 }
             }.accessibilityIdentifier("renewal.notifications")
                 .onChange(of: expiryNotifications) { _, _ in ExpiryPublisher.publish(store: store, renewal: renewal) }
             Toggle(isOn: $pruneProfiles) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("续签后清理旧描述文件")
-                    Text("同一个 App ID 只保留新装的那份；删除前留副本，可在「设备工具 → 描述文件」恢复").font(.caption).foregroundStyle(.secondary)
+                    Text("同一个 App ID 只保留新装的那份；删除前留副本，可在「设备工具 → 描述文件」恢复").font(.caption).foregroundStyle(Color.secondary)
                 }
             }.accessibilityIdentifier("renewal.pruneProfiles")
             HStack(spacing: 12) {
@@ -159,7 +159,7 @@ struct RenewalView: View {
                 Toggle(isOn: $renewal.settings.renewHost) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Retools 自身")
-                        Text("需与当前安装同一开发者团队").font(.caption).foregroundStyle(.secondary)
+                        Text("需与当前安装同一开发者团队").font(.caption).foregroundStyle(Color.secondary)
                     }
                 }
                 ExpiryBadge(expiry: renewal.hostExpiry)
@@ -183,7 +183,7 @@ struct RenewalView: View {
                     })) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(package.name).lineLimit(1)
-                            Text(package.signedBundleID ?? package.bundleID).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            Text(package.signedBundleID ?? package.bundleID).font(.caption.monospaced()).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle)
                         }
                     }
                     if let expiry = settings.installedExpiries[key] { ExpiryBadge(expiry: expiry) }
@@ -195,7 +195,7 @@ struct RenewalView: View {
                     }
                 }
             }
-            if store.state.packages.isEmpty { Text("导入 IPA 后，可把应用加入续签队列。所选应用会签名并安装到桌面。").font(.footnote).foregroundStyle(.secondary) }
+            if store.state.packages.isEmpty { Text("导入 IPA 后，可把应用加入续签队列。所选应用会签名并安装到桌面。").font(.footnote).foregroundStyle(Color.secondary) }
             NavigationLink { AppExpiryView() } label: { Label("查看全部有效期", systemImage: "calendar.badge.clock") }.accessibilityIdentifier("renewal.expiry")
         } header: { Text("续签目标") } footer: {
             Text("到期前 2 天自动续签；打开 Retools 时也会检查。")
@@ -212,8 +212,8 @@ struct RenewalView: View {
                         HStack {
                             Image(systemName: settings.email == account.id ? "checkmark.circle.fill" : "person.crop.circle").foregroundStyle(Palette.accent)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(account.email).foregroundStyle(.primary)
-                                Text(renewal.accountProgress[account.id] ?? account.lastResult).font(.caption).foregroundStyle(.secondary)
+                                Text(account.email).foregroundStyle(Color.primary)
+                                Text(renewal.accountProgress[account.id] ?? account.lastResult).font(.caption).foregroundStyle(Color.secondary)
                             }
                             Spacer()
                         }
@@ -273,13 +273,13 @@ struct RenewalConnectionView: View {
             Section {
                 NavigationLink { DeviceConnectionView() } label: { Label("设备配对与连接", systemImage: "iphone.radiowaves.left.and.right") }.accessibilityIdentifier("settings.deviceConnection")
                 LabeledContent("配对记录", value: settings.hasPairing ? "已保存" : "尚未配置")
-                Text(renewal.deviceConnectionStatus).font(.footnote).foregroundStyle(.secondary)
+                Text(renewal.deviceConnectionStatus).font(.footnote).foregroundStyle(Color.secondary)
             } header: { Text("外部代理的本地回环") } footer: {
                 Text("外部代理提供回环。iOS 27 可在系统中配对并自动保存，也支持自动导入 Retools 文件夹中的配对记录。")
             }
         }
         .scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle("连接与验证服务").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .navigationTitle("连接与验证服务").navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -304,7 +304,7 @@ struct TwoFactorSheet: View {
                     Button("发送到受信任设备") { TwoFactorBroker.shared.answer(action: "devices") }
                     ForEach(prompt.numbers, id: \.id) { number in Button("发送短信到 \(number.number)") { TwoFactorBroker.shared.answer(action: "sms", id: number.id) } }
                 }
-            }.navigationTitle("Apple ID 双重认证").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            }.navigationTitle("Apple ID 双重认证").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消登录") { TwoFactorBroker.shared.answer(action: "cancel") } } }
         }
     }

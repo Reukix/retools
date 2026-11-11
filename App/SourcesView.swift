@@ -82,7 +82,7 @@ struct SourcesView: View {
         }
         .environment(\.editMode, $editMode)
         .scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle("软件源").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .navigationTitle("软件源").navigationBarTitleDisplayMode(.inline)
         .refreshable { await sources.refreshAll() }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -185,10 +185,10 @@ private struct DownloadRow: View {
                 Text("\(item.appName) v\(item.version)").font(.subheadline.weight(.semibold)).lineLimit(1)
                 if let fraction = item.fraction { ProgressView(value: fraction) } else { ProgressView().progressViewStyle(.linear) }
                 Text([item.fraction.map { $0.formatted(.percent.precision(.fractionLength(0))) }, item.sizeLabel, item.retry].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.caption.monospacedDigit()).foregroundStyle(Color.secondary).lineLimit(1)
             }
             Button { sources.cancelDownload(id: item.id) } label: { Image(systemName: "xmark.circle.fill").font(.title3) }
-                .buttonStyle(.borderless).foregroundStyle(.secondary).accessibilityLabel("取消下载 \(item.appName)")
+                .buttonStyle(.borderless).foregroundStyle(Color.secondary).accessibilityLabel("取消下载 \(item.appName)")
         }.padding(.vertical, 2)
     }
 }
@@ -201,12 +201,12 @@ private struct SourceRow: View {
             RemoteAppIcon(name: source.displayName, url: source.iconURL, size: 42)
             VStack(alignment: .leading, spacing: 3) {
                 Text(source.displayName).font(.headline).lineLimit(1)
-                Text(source.displayHost).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text(source.displayHost).font(.caption.monospaced()).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle)
                 if let error = source.lastError {
                     Label(error, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange).lineLimit(2)
                 } else {
                     Text("\(source.apps.count) 个应用" + (source.updatedAt.map { " · " + $0.formatted(.relative(presentation: .named)) + "更新" } ?? ""))
-                        .font(.caption).foregroundStyle(.tertiary)
+                        .font(.caption).foregroundStyle(Palette.tertiaryText)
                 }
             }
             Spacer(minLength: 4)
@@ -233,7 +233,7 @@ private struct AddSourcesSheet: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .overlay(alignment: .topLeading) {
                             if text.isEmpty {
-                                Text("每行一个地址，例如\nhttps://example.com/apps.json").font(.callout.monospaced()).foregroundStyle(.tertiary)
+                                Text("每行一个地址，例如\nhttps://example.com/apps.json").font(.callout.monospaced()).foregroundStyle(Palette.tertiaryText)
                                     .padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
                             }
                         }
@@ -256,7 +256,7 @@ private struct AddSourcesSheet: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(row.input).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
                                     switch row.state {
-                                    case .pending: Text("正在读取…").font(.caption).foregroundStyle(.secondary)
+                                    case .pending: Text("正在读取…").font(.caption).foregroundStyle(Color.secondary)
                                     case .success(let detail): Text(detail).font(.subheadline.weight(.semibold))
                                     case .failure(let reason): Text(reason).font(.caption).foregroundStyle(.red)
                                     }
@@ -319,8 +319,8 @@ struct SourceAppsView: View {
             if let source {
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
-                        if let subtitle = source.subtitle { Text(subtitle).font(.subheadline).foregroundStyle(.secondary) }
-                        Text(source.url.absoluteString).font(.caption.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled)
+                        if let subtitle = source.subtitle { Text(subtitle).font(.subheadline).foregroundStyle(Color.secondary) }
+                        Text(source.url.absoluteString).font(.caption.monospaced()).foregroundStyle(Palette.tertiaryText).textSelection(.enabled)
                         if let error = source.lastError { Label(error, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange) }
                     }
                 }
@@ -354,8 +354,8 @@ private struct SourceAppRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(app.name).font(.headline).lineLimit(1)
                 Text([app.latest.map { "v" + $0.version }, app.developer, sourceName].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                if let subtitle = app.subtitle { Text(subtitle).font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
+                    .font(.caption).foregroundStyle(Color.secondary).lineLimit(1)
+                if let subtitle = app.subtitle { Text(subtitle).font(.caption).foregroundStyle(Palette.tertiaryText).lineLimit(1) }
             }
             Spacer(minLength: 4)
             if app.beta { StatusPill(title: "Beta", color: .secondary) }
@@ -378,8 +378,8 @@ struct SourceAppDetailView: View {
                     RemoteAppIcon(name: app.name, url: app.iconURL, size: 72)
                     VStack(alignment: .leading, spacing: 5) {
                         Text(app.name).font(.title2.bold()).lineLimit(2)
-                        Text(app.bundleID).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-                        Text([app.developer, sourceName].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                        Text(app.bundleID).font(.caption.monospaced()).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                        Text([app.developer, sourceName].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(Palette.tertiaryText).lineLimit(1)
                     }
                 }.listRowBackground(Color.clear)
                 if let latest = app.latest { DownloadButton(app: app, version: latest, prominent: true) }
@@ -414,7 +414,7 @@ struct SourceAppDetailView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("v" + version.version + (version.build.map { " (\($0))" } ?? ""))
                                 Text([version.dateLabel, version.size.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }].compactMap { $0 }.joined(separator: " · "))
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.caption).foregroundStyle(Color.secondary)
                             }
                             Spacer()
                             DownloadButton(app: app, version: version, prominent: false)
@@ -477,7 +477,7 @@ private struct ReleaseNotes: View {
     @State private var expanded = false
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(Self.render(markdown)).font(.callout).foregroundStyle(.secondary)
+            Text(Self.render(markdown)).font(.callout).foregroundStyle(Color.secondary)
                 .lineLimit(expanded ? nil : 8).textSelection(.enabled)
             if markdown.split(separator: "\n").count > 8 || markdown.count > 400 {
                 Button(expanded ? "收起" : "展开全部") { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } }.font(.caption.weight(.semibold))

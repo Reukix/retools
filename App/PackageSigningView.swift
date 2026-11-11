@@ -30,6 +30,11 @@ struct PackageSigningView: View {
     @State private var expandedOptions = false
     @State private var completed: String?
     @State private var pendingSave: Task<Void, Never>?
+    @State private var embedded: [EmbeddedLibrary] = []
+    @State private var embeddedIssue: String?
+    @State private var inspectingEmbedded = true
+    @State private var embeddedAttempt = 0
+    private var injected: [EmbeddedLibrary] { embedded.filter(\.isInjectedPlugin) }
     private var package: AppPackage? { store.state.packages.first { $0.id == packageID } }
     private var entries: [PluginInjection] { package?.pluginInjections ?? [] }
     private var identity: SigningIdentity? { options.identityID == nil ? store.activeIdentity : options.selectedIdentity(in: store.state.identities) }
@@ -70,7 +75,7 @@ struct PackageSigningView: View {
                     }
             } else { ContentUnavailableView("应用已移除", systemImage: "app.dashed") }
         }
-        .navigationTitle("签名配置").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).toolbar(.visible, for: .navigationBar).tint(projectAccent)
+        .navigationTitle("签名配置").navigationBarTitleDisplayMode(.inline).toolbar(.visible, for: .navigationBar).tint(projectAccent)
         .navigationBarBackButtonHidden(busy)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -84,6 +89,12 @@ struct PackageSigningView: View {
             }
         }
         .interactiveDismissDisabled(busy)
+        .task(id: (package?.fileName ?? "") + ":\(embeddedAttempt)") {
+            inspectingEmbedded = true
+            defer { inspectingEmbedded = false }
+            do { embedded = try await store.service.embeddedLibraries(for: .package(packageID)); embeddedIssue = nil }
+            catch { embeddedIssue = error.localizedDescription }
+        }
         .sheet(item: $field) { field in
             SigningProjectFieldEditor(field: field, initial: field.value(options)) { value in
                 guard let package else { return }
@@ -142,22 +153,22 @@ struct PackageSigningView: View {
                 }.buttonStyle(.plain).accessibilityLabel("修改应用图标").accessibilityIdentifier("project.icon")
                     .contextMenu { Button("恢复原图标") { options.iconFile = nil; options.repairDarkIcon = true; options.repairWhiteIcon = false } }
                 VStack(alignment: .leading, spacing: 7) {
-                    Button { field = .name } label: { HStack(spacing: 7) { Text(options.name(for: package)).font(.title2.bold()).foregroundStyle(.primary).multilineTextAlignment(.leading); Image(systemName: "pencil").font(.caption).foregroundStyle(.tertiary) } }.buttonStyle(.plain).accessibilityIdentifier("project.name")
-                    Button { field = .identifier } label: { HStack(spacing: 6) { Text(options.identifier(for: package)).font(.caption.monospaced()).lineLimit(2); Image(systemName: "square.and.pencil").font(.caption2) }.foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityIdentifier("project.bundleID")
-                    Button { field = .version } label: { Text("版本 " + options.appVersion(for: package)).font(.caption).foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityIdentifier("project.version")
+                    Button { field = .name } label: { HStack(spacing: 7) { Text(options.name(for: package)).font(.title2.bold()).foregroundStyle(Color.primary).multilineTextAlignment(.leading); Image(systemName: "pencil").font(.caption).foregroundStyle(Palette.tertiaryText) } }.buttonStyle(.plain).accessibilityIdentifier("project.name")
+                    Button { field = .identifier } label: { HStack(spacing: 6) { Text(options.identifier(for: package)).font(.caption.monospaced()).lineLimit(2); Image(systemName: "square.and.pencil").font(.caption2) }.foregroundStyle(Color.secondary) }.buttonStyle(.plain).accessibilityIdentifier("project.bundleID")
+                    Button { field = .version } label: { Text("版本 " + options.appVersion(for: package)).font(.caption).foregroundStyle(Color.secondary) }.buttonStyle(.plain).accessibilityIdentifier("project.version")
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
-            Button { field = .note } label: { Label(options.note.isEmpty ? "添加备注" : options.note, systemImage: "text.alignleft").font(.caption).foregroundStyle(.secondary).lineLimit(2) }.buttonStyle(.plain)
+            Button { field = .note } label: { Label(options.note.isEmpty ? "添加备注" : options.note, systemImage: "text.alignleft").font(.caption).foregroundStyle(Color.secondary).lineLimit(2) }.buttonStyle(.plain)
             if options.identifier(for: package) != package.bundleID {
                 Toggle(isOn: $migrateData) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("安装时迁移原应用的数据").font(.subheadline)
                         Text("换了 Bundle ID 后，新应用默认是空的。打开后，安装前会先备份原应用的数据，装好后写进新应用；原应用不受影响。")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(Color.secondary)
                     }
                 }.tint(projectAccent).accessibilityIdentifier("project.migrateData")
             }
-            if package.isEncrypted { Label("此 IPA 已加密，无法重新签名。", systemImage: "lock").font(.footnote).foregroundStyle(.secondary) }
+            if package.isEncrypted { Label("此 IPA 已加密，无法重新签名。", systemImage: "lock").font(.footnote).foregroundStyle(Color.secondary) }
         }.padding(.horizontal, 4).padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
     }
     private func outputCard(_ package: AppPackage) -> some View {
@@ -166,22 +177,22 @@ struct PackageSigningView: View {
             Button { field = .output } label: {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("文件名称").font(.caption).foregroundStyle(.secondary)
-                        Text((try? options.fileName(for: package)) ?? "文件名无效").font(.caption.monospaced()).foregroundStyle(.primary).multilineTextAlignment(.leading)
+                        Text("文件名称").font(.caption).foregroundStyle(Color.secondary)
+                        Text((try? options.fileName(for: package)) ?? "文件名无效").font(.caption.monospaced()).foregroundStyle(Color.primary).multilineTextAlignment(.leading)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "pencil").font(.subheadline)
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel("编辑输出文件名").accessibilityIdentifier("project.outputName")
-            HStack { Text("文件格式").font(.subheadline).foregroundStyle(.secondary); Spacer(); Picker("导出格式", selection: $options.format) { ForEach(SigningExportFormat.allCases) { Text($0.rawValue.uppercased()).tag($0) } }.pickerStyle(.segmented).frame(width: 145).accessibilityIdentifier("project.format") }
+            HStack { Text("文件格式").font(.subheadline).foregroundStyle(Color.secondary); Spacer(); Picker("导出格式", selection: $options.format) { ForEach(SigningExportFormat.allCases) { Text($0.rawValue.uppercased()).tag($0) } }.pickerStyle(.segmented).frame(width: 145).accessibilityIdentifier("project.format") }
         }
     }
     private var selectionPage: some View { PluginSelectionView(target: .package(packageID), defaultSigningTarget: options.directInjection ? .executable : .loader, projectNewPluginsFirst: options.newPluginsFirst) }
     private var pluginsCard: some View {
         card {
             HStack(spacing: 13) {
-                Label("插件", systemImage: "puzzlepiece.extension").font(.subheadline.weight(.semibold))
-                Text("\(entries.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Label("插件", systemImage: "puzzlepiece.extension").font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
+                Text(inspectingEmbedded ? "…" : "\(entries.count + injected.count)").font(.caption.monospacedDigit()).foregroundStyle(Color.secondary).accessibilityIdentifier("project.pluginCount")
                 Spacer(minLength: 5)
                 NavigationLink { selectionPage } label: { Text("管理").font(.subheadline) }.accessibilityLabel("排序与详细配置").accessibilityIdentifier("package.plugins")
                 Menu {
@@ -193,12 +204,28 @@ struct PackageSigningView: View {
                     Button(selecting ? "移除所选注入" : "移除全部注入", systemImage: "trash", role: .destructive) { confirmRemove = true }.disabled(entries.isEmpty || (selecting && selectedEntries.isEmpty))
                 } label: { Image(systemName: "plus.circle.fill").font(.system(size: 21)) }.accessibilityLabel("添加与管理插件").accessibilityIdentifier("project.addPlugin")
             }
+            if inspectingEmbedded { ProgressView("正在识别已有注入插件…").font(.caption) }
             if selecting {
                 HStack {
-                    Text("已选择 \(selectedEntries.count) 项").font(.caption).foregroundStyle(.secondary)
+                    Text("已选择 \(selectedEntries.count) 项").font(.caption).foregroundStyle(Color.secondary)
                     Spacer()
                     Button("完成选择") { selecting = false; selectedEntries.removeAll() }.font(.caption)
                 }
+            }
+            if !injected.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("IPA 已注入 · \(injected.count) 个插件").font(.caption.weight(.semibold)).foregroundStyle(Color.secondary)
+                    ForEach(injected) { library in
+                        NavigationLink { EmbeddedLibraryDetail(library: library) } label: { EmbeddedLibraryRow(library: library) }
+                    }
+                }
+                NavigationLink { EmbeddedLibrariesView(target: .package(packageID), onlyPlugins: true) } label: {
+                    Label("查看已注入插件", systemImage: "puzzlepiece.extension").font(.subheadline)
+                }.accessibilityIdentifier("project.embeddedLibraries")
+            }
+            if let embeddedIssue {
+                Text("读取已有插件失败：" + embeddedIssue).font(.caption).foregroundStyle(.red)
+                Button("重新识别") { embeddedAttempt += 1 }.font(.caption)
             }
             if entries.isEmpty {
                 NavigationLink { selectionPage } label: { Label("选择插件", systemImage: "plus").font(.subheadline).frame(maxWidth: .infinity).padding(.vertical, 10).background(projectAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: 10)) }.accessibilityIdentifier("project.choosePlugins")
@@ -209,7 +236,7 @@ struct PackageSigningView: View {
                         Button { if selectedEntries.contains(entry.id) { selectedEntries.remove(entry.id) } else { selectedEntries.insert(entry.id) } } label: { Image(systemName: selectedEntries.contains(entry.id) ? "checkmark.circle.fill" : "circle") }
                     } else { Image(systemName: "puzzlepiece.extension.fill").foregroundStyle(projectAccent).font(.system(size: 16)).frame(width: 34, height: 34).background(projectAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: 9)) }
                     VStack(alignment: .leading, spacing: 6) {
-                        Text((entry.path as NSString).lastPathComponent).font(.subheadline.weight(.medium)).foregroundStyle(.primary).lineLimit(2)
+                        Text((entry.path as NSString).lastPathComponent).font(.subheadline.weight(.medium)).foregroundStyle(Color.primary).lineLimit(2)
                         Menu {
                             Section("注入位置") { ForEach(PluginSigningTarget.allCases) { target in Button(target.title) { changeEntries { values in values.map { var item = $0; if item.id == entry.id { item.signingTarget = target }; return item } } } } }
                             Section("加载方式") { ForEach(PluginLoadKind.allCases) { kind in Button(kind.title) { changeEntries { values in values.map { var item = $0; if item.id == entry.id { item.loadKind = kind }; return item } } } } }
@@ -222,7 +249,7 @@ struct PackageSigningView: View {
                 }.padding(.vertical, 5)
             }
             if entries.contains(where: { $0.signingTarget == .loader }) && entries.contains(where: { $0.signingTarget != .loader }) {
-                Text("两种方式分别处理加载顺序；需要统一顺序时，请全部使用加载器。").font(.caption).foregroundStyle(.secondary)
+                Text("两种方式分别处理加载顺序；需要统一顺序时，请全部使用加载器。").font(.caption).foregroundStyle(Color.secondary)
             }
         }
     }
@@ -241,7 +268,7 @@ struct PackageSigningView: View {
                 HStack {
                     Label("更多选项", systemImage: "slider.horizontal.3").font(.subheadline)
                     Spacer()
-                    Image(systemName: expandedOptions ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.secondary)
+                    Image(systemName: expandedOptions ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(Color.secondary)
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityValue(expandedOptions ? "已展开" : "已收起").accessibilityIdentifier("project.advancedOptions")
             if expandedOptions { advancedOptions.padding(.top, 2) }
@@ -259,12 +286,12 @@ struct PackageSigningView: View {
             Divider()
             configToggle("新插件放在最前", detail: nil, value: $options.newPluginsFirst, id: "project.newPluginsFirst")
             Divider()
-            Picker(selection: $options.gameMode) { ForEach(SigningGameMode.allCases) { Text($0.title).tag($0) } } label: { VStack(alignment: .leading, spacing: 5) { Text("游戏模式"); Text(options.gameMode.title).font(.caption).foregroundStyle(.secondary) } }.accessibilityIdentifier("project.gameMode")
+            Picker(selection: $options.gameMode) { ForEach(SigningGameMode.allCases) { Text($0.title).tag($0) } } label: { VStack(alignment: .leading, spacing: 5) { Text("游戏模式"); Text(options.gameMode.title).font(.caption).foregroundStyle(Color.secondary) } }.accessibilityIdentifier("project.gameMode")
             Divider()
-            Button { field = .minimum } label: { HStack { VStack(alignment: .leading, spacing: 5) { Text("最低系统版本").foregroundStyle(.primary); Text(options.minimumOS.isEmpty ? "保持原始设置" : "iOS " + options.minimumOS).font(.caption).foregroundStyle(.secondary) }; Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary) } }.accessibilityIdentifier("project.minimumOS")
+            Button { field = .minimum } label: { HStack { VStack(alignment: .leading, spacing: 5) { Text("最低系统版本").foregroundStyle(Color.primary); Text(options.minimumOS.isEmpty ? "保持原始设置" : "iOS " + options.minimumOS).font(.caption).foregroundStyle(Color.secondary) }; Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(Color.secondary) } }.accessibilityIdentifier("project.minimumOS")
             Divider()
             HStack {
-                VStack(alignment: .leading, spacing: 5) { Text("Entitlements"); Text("受描述文件授权范围约束").font(.caption).foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 5) { Text("Entitlements"); Text("受描述文件授权范围约束").font(.caption).foregroundStyle(Color.secondary) }
                 Spacer(minLength: 8)
                 Menu {
                     Button("导入文件") { importKind = "entitlements"; showImporter = true }
@@ -272,14 +299,14 @@ struct PackageSigningView: View {
                     if options.customEntitlements != nil { Button("清除", role: .destructive) { options.customEntitlements = nil } }
                 } label: { Text(options.customEntitlements == nil ? "导入" : "已配置").font(.subheadline); Image(systemName: "chevron.right").font(.caption) }.accessibilityIdentifier("project.entitlements")
             }
-            Text("应用扩展会从签名副本中移除。").font(.caption).foregroundStyle(.secondary)
+            Text("应用扩展会从签名副本中移除。").font(.caption).foregroundStyle(Color.secondary)
         }
     }
     private func configToggle(_ title: String, detail: String?, value: Binding<Bool>, id: String) -> some View {
         Toggle(isOn: value) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                if let detail { Text(detail).font(.caption).foregroundStyle(Color.secondary).fixedSize(horizontal: false, vertical: true) }
             }
         }.accessibilityIdentifier(id)
     }
@@ -288,7 +315,7 @@ struct PackageSigningView: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "checkmark.seal.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white).frame(width: 40, height: 40).background(Palette.accentGradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("签名证书").font(.caption).foregroundStyle(.secondary)
+                    Text("签名证书").font(.caption).foregroundStyle(Color.secondary)
                     Menu {
                         Picker("签名证书", selection: Binding(get: { options.identityID }, set: { id in options.selectIdentity(store.state.identities.first { $0.id == id }) })) {
                             Text("跟随当前签名证书").tag(UUID?.none)
@@ -314,7 +341,11 @@ struct PackageSigningView: View {
     }
     private var dependenciesCard: some View {
         card {
-            Label("文件与依赖", systemImage: "folder").font(.subheadline.weight(.semibold))
+                Label("文件与依赖", systemImage: "folder").font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
+            NavigationLink { EmbeddedLibrariesView(target: .package(packageID)) } label: {
+                fileActionRow("全部动态库与依赖", detail: "包含应用自带框架和插件支持组件")
+            }.accessibilityIdentifier("project.allLibraries")
+            Divider()
             Button { projectPanel = .workspace } label: {
                 fileActionRow("浏览工作区文件", detail: "查看当前配置的文件副本")
             }.buttonStyle(.plain).accessibilityIdentifier("project.browse")
@@ -337,9 +368,9 @@ struct PackageSigningView: View {
     private func footer(_ package: AppPackage) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(identity == nil ? "请选择签名证书" : identity?.isExpired == true ? "证书已过期，请更换" : exportOnly ? "签名后导出文件" : "签名后安装到当前设备").font(.caption).foregroundStyle(.secondary)
+                Text(identity == nil ? "请选择签名证书" : identity?.isExpired == true ? "证书已过期，请更换" : exportOnly ? "签名后导出文件" : "签名后安装到当前设备").font(.caption).foregroundStyle(Color.secondary)
                 Spacer()
-                Text(options.format.rawValue.uppercased()).font(.caption.monospaced().weight(.medium)).foregroundStyle(.secondary)
+                Text(options.format.rawValue.uppercased()).font(.caption.monospaced().weight(.medium)).foregroundStyle(Color.secondary)
             }
             HStack(spacing: 10) {
                 Button { runSign(install: !exportOnly) } label: {

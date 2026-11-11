@@ -1,4 +1,4 @@
-module retools.local/storeengine
+module github.com/majd/ipatool/v2/retools
 
 go 1.26.5
 

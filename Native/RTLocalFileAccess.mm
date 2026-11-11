@@ -49,16 +49,27 @@ static NSNumber *accessFailure(NSError **error, NSString *message, NSInteger cod
 
     BOOL validContainer = NO;
     BOOL bundleProbe = NO;
-    for (NSString *prefix in @[@"/private/var/mobile/Containers/Data/Application/", @"/private/var/mobile/Containers/Data/PluginKitPlugin/", @"/private/var/mobile/Containers/Shared/AppGroup/"]) {
+    for (NSString *prefix in @[@"/private/var/mobile/Containers/Data/Application/", @"/private/var/mobile/Containers/Data/PluginKitPlugin/", @"/private/var/mobile/Containers/Data/InternalDaemon/", @"/private/var/mobile/Containers/Shared/AppGroup/"]) {
         if ([container hasPrefix:prefix]) {
             NSString *uuid = [container substringFromIndex:prefix.length];
             validContainer = [[NSUUID alloc] initWithUUIDString:uuid] != nil;
             break;
         }
     }
+    BOOL systemArea = [container isEqualToString:@"/private/var/containers/Data/System"];
+    NSString *systemPrefix = @"/private/var/containers/Shared/SystemGroup/";
+    if ([container hasPrefix:systemPrefix]) {
+        NSString *name = [container substringFromIndex:systemPrefix.length];
+        NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"];
+        systemArea = [name hasPrefix:@"systemgroup."] && name.length > 12 && [name rangeOfCharacterFromSet:allowed.invertedSet].location == NSNotFound;
+    }
+    BOOL appGroupParent = [container isEqualToString:@"/private/var/mobile/Containers/Shared/AppGroup"];
+    if (appGroupParent && os.majorVersion < 27) return accessFailure(error, @"App Group 总目录仅支持在兼容的 iOS 27 上访问。");
+    if (systemArea && os.majorVersion < 27) return accessFailure(error, @"当前系统不支持本机访问系统容器。");
+    validContainer = validContainer || systemArea || appGroupParent;
     // A specific installed app bundle can be probed for the decryption workflow.
     // This is outside the upstream's documented roots: success is never assumed.
-    // The regular file browser still only accepts data-container UUID roots.
+    // The browser accepts only the documented data and system container roots.
     NSString *bundlePrefix = @"/private/var/containers/Bundle/Application/";
     if ([container hasPrefix:bundlePrefix]) {
         NSArray<NSString *> *parts = [[container substringFromIndex:bundlePrefix.length] componentsSeparatedByString:@"/"];
@@ -67,7 +78,7 @@ static NSNumber *accessFailure(NSError **error, NSString *message, NSInteger cod
             ![parts.lastObject isEqualToString:@"."] && ![parts.lastObject isEqualToString:@".."];
         validContainer = bundleProbe;
     }
-    if (!validContainer) return accessFailure(error, @"请选择一个具体的应用数据容器目录。");
+    if (!validContainer) return accessFailure(error, @"请选择一个受支持的容器目录。");
     NSFileManager *files = NSFileManager.defaultManager;
     NSURL *groupRoot = [files containerURLForSecurityApplicationGroupIdentifier:group];
     if (!groupRoot) return accessFailure(error, @"系统未提供 App Group 容器，请先检测组的读写权限。");
@@ -87,7 +98,7 @@ static NSNumber *accessFailure(NSError **error, NSString *message, NSInteger cod
 
     BOOL alternate = os.majorVersion == 26 && [container hasPrefix:@"/private/var/mobile/Containers/Shared/AppGroup/"];
     // create_dir only skips the PoC's pre-query lstat; it creates no target files.
-    int64_t handle = worse_query(container, group, alternate, bundleProbe);
+    int64_t handle = worse_query(container, group, alternate, bundleProbe || systemArea || appGroupParent);
     if (handle < 0) {
         NSDictionary *messages = @{@(-1): @"无法访问专用 App Group。", @(-2): @"系统缺少所需的容器接口。",
             @(-3): @"无法创建容器查询。", @(-4): @"无法准备专用组的临时缓存入口。",

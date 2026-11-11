@@ -36,8 +36,13 @@ enum HostAppGroup {
             appGroups: includeAppGroup ? [baseIdentifier] : [])]
         let extensions = (try? FileManager.default.contentsOfDirectory(at: bundle.appendingPathComponent("PlugIns"), includingPropertiesForKeys: nil)) ?? []
         for url in extensions.filter({ $0.pathExtension == "appex" }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            guard let id = try ArchiveService.metadata(at: url)["CFBundleIdentifier"] as? String else { throw WorkspaceFailure("Retools 扩展缺少 Bundle ID。") }
-            requests.append(AppleBundleRequest(bundleID: id, name: "Retools 配对", entitlementKeys: ["get-task-allow"], appGroups: []))
+            let metadata = try ArchiveService.metadata(at: url)
+            guard let id = metadata["CFBundleIdentifier"] as? String else { throw WorkspaceFailure("Retools 扩展缺少 Bundle ID。") }
+            let needsGroup = includeAppGroup && metadata["RetoolsRequiresSharedAppGroup"] as? Bool == true
+            requests.append(AppleBundleRequest(bundleID: id,
+                name: metadata["CFBundleDisplayName"] as? String ?? "Retools 扩展",
+                entitlementKeys: needsGroup ? ["get-task-allow", entitlement] : ["get-task-allow"],
+                appGroups: needsGroup ? [baseIdentifier] : []))
         }
         return requests
     }

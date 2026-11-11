@@ -15,14 +15,15 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     TARGETED_DEVICE_FAMILY: "1,2"
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: 51
+    CURRENT_PROJECT_VERSION: 63
     SWIFT_STRICT_CONCURRENCY: targeted
     EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
 targets:
   Retools:
     type: application
     platform: iOS
-    sources: [Host]
+    sources:
+      - path: Host
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.retools.ios
@@ -50,7 +51,7 @@ targets:
             CFBundleTypeRole: Editor
             LSHandlerRank: Owner
             LSItemContentTypes: [com.apple.itunes.ipa, public.zip-archive]
-        LSApplicationQueriesSchemes: [sidestore, altstore, stikdebug, retoolsdecrypt]
+        LSApplicationQueriesSchemes: [sidestore, altstore, stikdebug, retoolsdecrypt, itms-services]
         LSSupportsOpeningDocumentsInPlace: true
         UIFileSharingEnabled: true
         UILaunchScreen:
@@ -73,12 +74,23 @@ targets:
         NSRemindersFullAccessUsageDescription: 容器中的应用请求访问提醒事项。
         NSAppleMusicUsageDescription: 容器中的应用请求访问媒体资料库。
         UIBackgroundModes: [processing, fetch, location]
-        BGTaskSchedulerPermittedIdentifiers: [dev.retools.ios.renewal, dev.retools.ios.renewal-check]
+        BGTaskSchedulerPermittedIdentifiers: [dev.retools.ios.renewal, dev.retools.ios.renewal-check, dev.retools.ios.store-update-check]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     dependencies:
+      - target: ZIPFoundation
+        embed: true
+        link: false
+      - target: IPadnKit
+        embed: true
+        link: false
       - target: ContainerControls
         embed: true
         link: false
       - target: RetoolsPluginLoader
+        embed: true
+        link: false
+      - target: TweakLoader
         embed: true
         link: false
       - target: RetoolsPairingWidget
@@ -104,6 +116,41 @@ targets:
       - framework: Vendor/OpenSSL.xcframework
         embed: true
         link: false
+    postBuildScripts:
+      - name: Embed container hook runtime
+        script: |
+          /bin/mkdir -p "${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
+          /usr/bin/ditto "${BUILT_PRODUCTS_DIR}/TweakLoader.dylib" "${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/TweakLoader.dylib"
+          if [ "${CODE_SIGNING_ALLOWED}" != "NO" ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY}" ]; then
+            /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" --timestamp=none "${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/TweakLoader.dylib"
+          fi
+          if [ "${PLATFORM_NAME}" = "iphoneos" ]; then
+            /usr/bin/ditto "${SRCROOT}/Vendor/LiveContainer/Resources/Frameworks/CydiaSubstrate.framework" "${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/CydiaSubstrate.framework"
+            if [ "${CODE_SIGNING_ALLOWED}" != "NO" ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY}" ]; then
+              /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" --timestamp=none "${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/CydiaSubstrate.framework"
+            fi
+          fi
+        basedOnDependencyAnalysis: false
+  TweakLoader:
+    type: library.dynamic
+    platform: iOS
+    sources:
+      - path: Vendor/LiveContainer/TweakLoader
+    settings:
+      base:
+        PRODUCT_NAME: TweakLoader
+        EXECUTABLE_PREFIX: ""
+        OTHER_LDFLAGS: ["$(inherited)", "-Wl,-U,_OBJC_CLASS_$_FBSSceneParameters", "-Wl,-U,_OBJC_CLASS_$_LSApplicationWorkspace", "-Wl,-U,_OBJC_CLASS_$_DOCConfiguration"]
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/LiveContainer/LiveContainer $(SRCROOT)/Runtime/ContainerBridge"
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+    dependencies:
+      - target: LiveContainerShared
+        embed: false
+      - sdk: UIKit.framework
+      - sdk: UniformTypeIdentifiers.framework
+      - sdk: UserNotifications.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: Security.framework
   LiveContainerShared:
     type: framework
     platform: iOS
@@ -161,6 +208,40 @@ targets:
       - sdk: libc++.tbd
       - sdk: Security.framework
       - sdk: UIKit.framework
+  ZIPFoundation:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Vendor/ZIPFoundation
+        excludes: [LICENSE, Resources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.retools.zipfoundation
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - sdk: libz.tbd
+  IPadnKit:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Vendor/IPadn/Sources
+      - path: Vendor/IPadn/Resources
+        buildPhase: resources
+        excludes: [SAPRuntime]
+      - path: Vendor/IPadn/Resources/SAPRuntime
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.retools.storebrowser
+        GENERATE_INFOPLIST_FILE: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+    dependencies:
+      - target: ZIPFoundation
+        embed: false
+      - sdk: libz.tbd
+      - sdk: Security.framework
+      - sdk: libresolv.tbd
   LiveContainerSwiftUI:
     type: framework
     platform: iOS
@@ -168,8 +249,6 @@ targets:
       - path: App
       - path: Shared
       - path: DecryptionCore
-      - path: Vendor/ZIPFoundation
-        excludes: [LICENSE, Resources]
       - path: Resources
         buildPhase: resources
     settings:
@@ -177,8 +256,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.reukix.retools.ui
         GENERATE_INFOPLIST_FILE: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
-        OTHER_LDFLAGS: "$(inherited) -Wl,-u,_uc_version -Wl,-u,_uc_open -Wl,-u,_uc_close -Wl,-u,_uc_query -Wl,-u,_uc_ctl -Wl,-u,_uc_strerror -Wl,-u,_uc_mem_map -Wl,-u,_uc_mem_unmap -Wl,-u,_uc_mem_read -Wl,-u,_uc_mem_write -Wl,-u,_uc_reg_read -Wl,-u,_uc_reg_write -Wl,-u,_uc_emu_start -Wl,-u,_uc_emu_stop -Wl,-u,_uc_hook_add -Wl,-u,_uc_hook_del"
+        OTHER_LDFLAGS: "$(inherited) -Wl,-u,_iPadnMacPKGDecrypt -Wl,-u,_iPadnMacPKGStatus -Wl,-u,_iPadnMacPKGCancel -Wl,-u,_uc_version -Wl,-u,_uc_open -Wl,-u,_uc_close -Wl,-u,_uc_query -Wl,-u,_uc_ctl -Wl,-u,_uc_strerror -Wl,-u,_uc_mem_map -Wl,-u,_uc_mem_unmap -Wl,-u,_uc_mem_read -Wl,-u,_uc_mem_write -Wl,-u,_uc_reg_read -Wl,-u,_uc_reg_write -Wl,-u,_uc_emu_start -Wl,-u,_uc_emu_stop -Wl,-u,_uc_hook_add -Wl,-u,_uc_hook_del"
     dependencies:
+      - target: ZIPFoundation
+        embed: false
+      - target: IPadnKit
+        embed: false
       - target: RetoolsDecryptHelper
         embed: false
         link: false
@@ -339,10 +422,26 @@ targets:
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Retools.app/Retools"
         BUNDLE_LOADER: "$(TEST_HOST)"
         GENERATE_INFOPLIST_FILE: YES
+  IPadnKitTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Vendor/IPadn/Tests]
+    dependencies:
+      - target: IPadnKit
+      - target: Retools
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.retools.storebrowser.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Retools.app/Retools"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES
   RetoolsUITests:
     type: bundle.ui-testing
     platform: iOS
-    sources: [UITests]
+    sources:
+      - path: UITests
+      - path: Tests/Fixtures/Fixture.ipa
+        buildPhase: resources
     dependencies:
       - target: Retools
     settings:
@@ -362,5 +461,5 @@ schemes:
       targets:
         Retools: all
     test:
-      targets: [RetoolsTests, RetoolsUITests]
+      targets: [RetoolsTests, IPadnKitTests, RetoolsUITests]
       gatherCoverageData: false

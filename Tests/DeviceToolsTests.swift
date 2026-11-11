@@ -495,11 +495,55 @@ final class DeviceToolsTests: XCTestCase {
         let store = DeviceToolsStore(backend: SampleDeviceToolsBackend())
         let renewal = RenewalController()
         await store.refresh(renewal: renewal)
-        XCTAssertEqual(store.developerImageMounted, false)
+        XCTAssertNil(store.developerImageMounted, "管理信息刷新不应检查开发者镜像")
         await store.mountDeveloperImage(renewal: renewal)
         XCTAssertEqual(store.developerImageMounted, true)
         XCTAssertNil(store.developerImageStep)
         XCTAssertNil(store.errorMessage)
+    }
+
+    @MainActor
+    func testAppListDoesNotRequireProfilesDiagnosticsOrDeveloperImage() async {
+        let backend = SampleDeviceToolsBackend(profilesUnavailable: true)
+        let store = DeviceToolsStore(backend: backend)
+        await store.loadApps(renewal: RenewalController())
+        XCTAssertEqual(store.appsPhase, .ready)
+        XCTAssertFalse(store.apps.isEmpty)
+        let calls = await backend.serviceCalls
+        XCTAssertEqual(calls, ["apps:User"])
+        XCTAssertNil(store.developerImageMounted)
+    }
+
+    @MainActor
+    func testManagementRefreshKeepsIndependentServicesAfterProfileFailure() async {
+        let backend = SampleDeviceToolsBackend(profilesUnavailable: true)
+        let store = DeviceToolsStore(backend: backend)
+        await store.refresh(renewal: RenewalController())
+        XCTAssertEqual(store.appsPhase, .ready)
+        XCTAssertEqual(store.infoPhase, .ready)
+        guard case .failed = store.profilesPhase else { return XCTFail("应单独报告描述文件失败") }
+        XCTAssertFalse(store.apps.isEmpty)
+        XCTAssertNotNil(store.info)
+        let calls = await backend.serviceCalls
+        XCTAssertFalse(calls.contains("imageStatus"))
+        XCTAssertFalse(calls.contains("mountImage"))
+    }
+
+    @MainActor
+    func testLaunchingAppCanMountImageWhileOwningBusyState() async throws {
+        let backend = SampleDeviceToolsBackend()
+        let store = DeviceToolsStore(backend: backend)
+        let renewal = RenewalController()
+        await store.loadApps(renewal: renewal)
+        let app = try XCTUnwrap(store.apps.first)
+        await store.launch(app, renewal: renewal)
+        XCTAssertEqual(store.developerImageMounted, true)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertNil(store.busy)
+        let calls = await backend.serviceCalls
+        XCTAssertTrue(calls.contains("mountImage"))
+        let processes = try await backend.runningProcesses(withUsage: false)
+        XCTAssertTrue(processes.contains { $0.name == app.bundleID })
     }
 
     func testChinaCoordinateConversion() {

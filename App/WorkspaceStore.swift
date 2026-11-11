@@ -1,5 +1,6 @@
 import SwiftUI
 import RetoolsNative
+import LocalAuthentication
 
 @MainActor
 final class WorkspaceStore: ObservableObject {
@@ -21,6 +22,7 @@ final class WorkspaceStore: ObservableObject {
     /// 外部链接请求添加的软件源地址，等待用户在添加面板确认。
     @Published var pendingSourceInput: String?
     @Published var showDecryption = false
+    @Published var pendingStoreDecryptionSource: URL?
     @Published var storageBytes: Int64 = 0
     @Published var diagnosticPassed = false
     @Published var runtimeIssue: String?
@@ -55,6 +57,11 @@ final class WorkspaceStore: ObservableObject {
         } catch { failure = "无法读取工作区：\(error.localizedDescription)" }
         state = initial; loadFailed = failure != nil; errorMessage = failure
         service = WorkspaceService(paths: paths, state: initial)
+        if let requested = UserDefaults.standard.string(forKey: "RetoolsPendingContainerLaunch") {
+            UserDefaults.standard.removeObject(forKey: "RetoolsPendingContainerLaunch")
+            pendingExternalLaunch = initial.containerApps.first { $0.id.uuidString == requested }
+            selectedTab = .containers
+        }
         if FileManager.default.fileExists(atPath: ContainerControlMailbox.location(in: paths.support).path) { selectedTab = .containers }
         if let launchError = UserDefaults.standard.string(forKey: "error") {
             errorMessage = "容器启动失败：\(launchError)"; UserDefaults.standard.removeObject(forKey: "error")
@@ -96,7 +103,7 @@ final class WorkspaceStore: ObservableObject {
             return true
         }
     }
-    private func run(_ label: String, success: String? = nil, onError: ((Error) -> Void)? = nil, operation: @escaping () async throws -> WorkspaceState) {
+    func run(_ label: String, success: String? = nil, onError: ((Error) -> Void)? = nil, operation: @escaping () async throws -> WorkspaceState) {
         // 忙时不能静默忽略：例如后台续签时导入证书，面板关闭了但实际什么都没做。
         guard !isWorking else {
             let current = workLabel.trimmingCharacters(in: CharacterSet(charactersIn: "…. "))
@@ -117,6 +124,15 @@ final class WorkspaceStore: ObservableObject {
             defer { if url.path.hasPrefix(FileManager.default.temporaryDirectory.appendingPathComponent("Picked").path) { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) } }
             return try await self.service.importIPA(url)
         }
+    }
+    /// iPadn owns its completed downloads; importing must preserve the source and its folder.
+    func importStoreDownload(_ url: URL) async throws {
+        guard !isWorking else { throw WorkspaceFailure("请等待当前操作完成。") }
+        guard !loadFailed else { throw WorkspaceFailure("工作区读取失败，为保留现有文件已暂停写入。") }
+        isWorking = true; workLabel = "正在导入商店下载…"
+        defer { isWorking = false; workLabel = "" }
+        state = try await service.importIPA(url)
+        refreshStorage()
     }
     /// 导入从软件源下载的 IPA，完成或失败后删除下载用的临时目录。
     /// 同时下载多个应用时，后完成的会排队等前一个导入结束，而不是被丢弃。
@@ -341,10 +357,14 @@ final class WorkspaceStore: ObservableObject {
         guard !isWorking else { return }
         if isSimulator { errorMessage = "容器运行需要已签名的 iPhone 或 iPad。模拟器支持导入和数据空间管理。"; return }
         isWorking = true; workLabel = "正在验证并启动…"
-        let mode = containerMode
+        let options = state.containerApps.first(where: { $0.id == app.id })?.runtimeOptions ?? ContainerRuntimeOptions()
+        let mode = options.launchMode.resolve(containerMode)
         Task {
             defer { isWorking = false; workLabel = "" }
             do {
+                if options.isLocked {
+                    guard try await LAContext().evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "解锁容器应用「\(app.name)」") else { throw WorkspaceFailure("未解锁容器应用。") }
+                }
                 if mode == .jit {
                     guard RTNative.hostAllowsDebugging() else { throw WorkspaceFailure("JIT 模式需要 Apple 开发签名授权的调试权限。请先在容器运行设置中配置开发签名，再运行应用。") }
                     if UserDefaults.standard.string(forKey: "RetoolsJITProvider") != "external" {
@@ -355,7 +375,8 @@ final class WorkspaceStore: ObservableObject {
                 state = try await service.prepareLaunch(app.id, mode: mode)
                 guard let current = state.containerApps.first(where: { $0.id == app.id }) else { return }
                 try RTNative.launchGuest(current.folder, container: current.selectedContainerID.uuidString, jit: mode == .jit)
-            } catch { JITLessCheckRecord.forget(); runtimeIssue = Self.containerErrorSummary(error); diagnosticPassed = false; errorMessage = runtimeIssue; AuthDiagnostics.record(stage: "容器启动", message: error.localizedDescription) }
+            } catch let error as LAError where [.userCancel, .systemCancel, .appCancel].contains(error.code) { return }
+            catch { JITLessCheckRecord.forget(); runtimeIssue = Self.containerErrorSummary(error); diagnosticPassed = false; errorMessage = runtimeIssue; AuthDiagnostics.record(stage: "容器启动", message: error.localizedDescription) }
         }
     }
     func iconURL(_ file: String?) -> URL? { file.map { paths.icons.appendingPathComponent($0) } }
@@ -369,7 +390,7 @@ final class WorkspaceStore: ObservableObject {
     func exportURL(_ package: AppPackage) -> URL? { package.signedFile.map { paths.exports.appendingPathComponent($0) } }
     func handleURL(_ url: URL) {
         if url.isFileURL { importIPA(url); return }
-        if url.scheme == "retools", url.host == "decryption" { selectedTab = .library; showDecryption = true; return }
+        if url.scheme == "retools", url.host == "decryption" { selectedTab = .tools; showDecryption = true; return }
         // 到期提醒和桌面小组件：打开应用库里的 Apple ID 签名有效期列表。
         if url.scheme == "retools", url.host == "expiry" { selectedTab = .library; showExpiryList = true; return }
         if url.scheme == "retools", url.host == "diagnose" { selectedTab = .containers; diagnose(); return }

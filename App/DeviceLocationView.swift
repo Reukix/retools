@@ -17,6 +17,8 @@ struct DeviceLocationView: View {
     @State private var showCoordinateInput = false
     @State private var latitudeText = ""
     @State private var longitudeText = ""
+    @State private var showHelp = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private func display(_ c: CLLocationCoordinate2D) -> CLLocationCoordinate2D { chinaCorrection ? ChinaCoordinate.wgsToGcj(c) : c }
     private func gps(_ c: CLLocationCoordinate2D) -> CLLocationCoordinate2D { chinaCorrection ? ChinaCoordinate.gcjToWgs(c) : c }
@@ -40,9 +42,11 @@ struct DeviceLocationView: View {
                 }
             }
             .overlay(alignment: .top) { searchPanel }
-            controlPanel
+            ScrollView { controlPanel }
+                .frame(height: dynamicTypeSize.isAccessibilitySize ? 330 : 230)
+                .bottomBarBackground()
         }
-        .navigationTitle("定位模拟").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .navigationTitle("定位模拟").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -56,6 +60,17 @@ struct DeviceLocationView: View {
             if target == nil, let place = location.active ?? location.recents.first { select(place) }
         }
         .sheet(isPresented: $showPlaces) { placesSheet }
+        .sheet(isPresented: $showHelp) {
+            NavigationStack {
+                List {
+                    ToolPageIntro(tool: .location, title: "模拟设备位置", detail: "在地图选点、搜索地点或输入 GPS 坐标，再点「模拟到这里」。")
+                    Section("运行条件") { Text("需要设备配对、回环连接与开发者镜像。开始模拟时才准备开发者服务。") }
+                    Section("恢复真实位置") { Text("停止模拟、关闭回环代理或重启手机可恢复真实位置。模拟期间 Retools 会在后台保持连接。") }
+                    Section("位置标记") { Text("系统会将此位置标记为软件模拟，检查该标记的应用能够识别。") }
+                }.toolListStyle().navigationTitle("定位模拟说明").navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showHelp = false } } }
+            }.presentationDetents([.medium, .large])
+        }
         .alert("输入坐标", isPresented: $showCoordinateInput) {
             TextField("纬度，例如 39.9087", text: $latitudeText).keyboardType(.numbersAndPunctuation)
             TextField("经度，例如 116.3975", text: $longitudeText).keyboardType(.numbersAndPunctuation)
@@ -76,10 +91,10 @@ struct DeviceLocationView: View {
     private var searchPanel: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                Image(systemName: "magnifyingglass").foregroundStyle(Color.secondary)
                 TextField("搜索地点", text: $query).submitLabel(.search).onSubmit(search).textInputAutocapitalization(.never)
                 if searching { ProgressView().controlSize(.small) }
-                if !query.isEmpty { Button { query = ""; results = [] } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) } }
+                if !query.isEmpty { Button { query = ""; results = [] } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Color.secondary) } }
             }
             .padding(.horizontal, 12).padding(.vertical, 10).background(.regularMaterial, in: Capsule())
             if !results.isEmpty {
@@ -91,9 +106,9 @@ struct DeviceLocationView: View {
                             results = []
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(item.name ?? "未命名地点").foregroundStyle(.primary).lineLimit(1)
+                                Text(item.name ?? "未命名地点").foregroundStyle(Color.primary).lineLimit(1)
                                 if let address = Self.address(of: item) {
-                                    Text(address).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    Text(address).font(.caption).foregroundStyle(Color.secondary).lineLimit(1)
                                 }
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.vertical, 9)
                         }
@@ -121,20 +136,25 @@ struct DeviceLocationView: View {
 
     private var controlPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            status
+            HStack(alignment: .top) {
+                status
+                Spacer(minLength: 8)
+                Button { showHelp = true } label: { Image(systemName: "info.circle") }
+                    .accessibilityLabel("定位模拟说明")
+            }
             if let target {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(target.name).font(.headline).lineLimit(1)
-                        Text(String(format: "%.6f, %.6f", target.latitude, target.longitude)).font(.caption.monospacedDigit()).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text(String(format: "%.6f, %.6f", target.latitude, target.longitude)).font(.caption.monospacedDigit()).foregroundStyle(Color.secondary).textSelection(.enabled)
                     }
                     Spacer(minLength: 6)
                     Button { location.toggleFavorite(target) } label: {
                         Image(systemName: location.isFavorite(target) ? "star.fill" : "star").font(.title3).foregroundStyle(location.isFavorite(target) ? .yellow : .secondary)
-                    }.accessibilityLabel("收藏")
+                    }.accessibilityLabel(location.isFavorite(target) ? "取消收藏" : "收藏地点")
                 }
             } else {
-                Text("在地图上点一下、搜索地点，或从右上角输入坐标。").font(.subheadline).foregroundStyle(.secondary)
+                Text("在地图上点一下、搜索地点，或从右上角输入坐标。").font(.subheadline).foregroundStyle(Color.secondary)
             }
             HStack(spacing: 10) {
                 Button {
@@ -150,15 +170,18 @@ struct DeviceLocationView: View {
                         .buttonStyle(.bordered).controlSize(.large).accessibilityIdentifier("location.stop")
                 }
             }
-            Text("模拟期间状态栏会显示定位图标，Retools 会在后台保持连接。停止、关闭回环代理或重启手机都会恢复真实位置。系统会把这种位置标记为「软件模拟」，检查这个标记的应用能识别出来。")
-                .font(.caption2).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button { showPlaces = true } label: { Label("收藏与最近", systemImage: "star") }
+                Spacer(minLength: 0)
+                Button { latitudeText = ""; longitudeText = ""; showCoordinateInput = true } label: { Label("输入坐标", systemImage: "number") }
+            }.font(.footnote).buttonStyle(.borderless)
         }
-        .padding().bottomBarBackground()
+        .padding()
     }
 
     @ViewBuilder private var status: some View {
         switch location.state {
-        case .idle: Label("未模拟，使用真实位置", systemImage: "location.slash").font(.subheadline).foregroundStyle(.secondary)
+        case .idle: Label("未模拟，使用真实位置", systemImage: "location.slash").font(.subheadline).foregroundStyle(Color.secondary)
         case .connecting:
             HStack(spacing: 8) { ProgressView().controlSize(.small); Text(tools.developerImageStep ?? "正在连接定位服务…").font(.subheadline) }
         case .simulating(let place): Label("正在模拟：\(place.name)", systemImage: "location.fill").font(.subheadline.weight(.semibold)).foregroundStyle(.green)
@@ -192,8 +215,8 @@ struct DeviceLocationView: View {
     private func placeRow(_ place: SavedLocation) -> some View {
         Button { select(place); showPlaces = false } label: {
             VStack(alignment: .leading, spacing: 2) {
-                Text(place.name).foregroundStyle(.primary)
-                Text(String(format: "%.5f, %.5f", place.latitude, place.longitude)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Text(place.name).foregroundStyle(Color.primary)
+                Text(String(format: "%.5f, %.5f", place.latitude, place.longitude)).font(.caption.monospacedDigit()).foregroundStyle(Color.secondary)
             }
         }
     }

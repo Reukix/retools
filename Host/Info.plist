@@ -6,6 +6,7 @@
 	<array>
 		<string>dev.retools.ios.renewal</string>
 		<string>dev.retools.ios.renewal-check</string>
+		<string>dev.retools.ios.store-update-check</string>
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
@@ -64,9 +65,15 @@
 		<string>altstore</string>
 		<string>stikdebug</string>
 		<string>retoolsdecrypt</string>
+		<string>itms-services</string>
 	</array>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>容器中的应用请求访问媒体资料库。</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>

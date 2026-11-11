@@ -1,4 +1,7 @@
 import Foundation
+#if !RETOOLS_DECRYPT_HELPER
+@_exported import ZIPFoundation
+#endif
 
 enum ArchiveService {
     static let maximumExpandedSize: UInt64 = 8 * 1024 * 1024 * 1024

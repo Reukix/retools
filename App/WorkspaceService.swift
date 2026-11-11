@@ -1,8 +1,12 @@
+import ZIPFoundation
 import Foundation
 import CryptoKit
 import RetoolsNative
 
 actor WorkspaceService {
+    // Previous releases could retain a signing cache after metadata migration
+    // patched the guest executable. Re-sign those records on their next launch.
+    static let containerSigningRevision = 1
     let paths: WorkspacePaths
     private var state: WorkspaceState
     private let fm = FileManager.default
@@ -59,6 +63,7 @@ actor WorkspaceService {
         let icon: Data?
         let byteCount: Int64
         let isEncrypted: Bool
+        let embeddedLibraries: [EmbeddedLibrary]
     }
     private func parseIPA(_ source: URL, in temp: URL) throws -> ParsedIPA {
         // Snapshot first; metadata and stored bytes must come from the same file.
@@ -73,7 +78,8 @@ actor WorkspaceService {
                          name: (info["CFBundleDisplayName"] as? String) ?? (info["CFBundleName"] as? String) ?? app.deletingPathExtension().lastPathComponent,
                          bundleID: info["CFBundleIdentifier"] as! String, version: info["CFBundleShortVersionString"] as? String ?? "1.0",
                          build: info["CFBundleVersion"] as? String ?? "1", minimumOS: info["MinimumOSVersion"] as? String ?? "未知",
-                         icon: ArchiveService.icon(at: app, info: info), byteCount: size, isEncrypted: binary.isEncrypted)
+                         icon: ArchiveService.icon(at: app, info: info), byteCount: size, isEncrypted: binary.isEncrypted,
+                         embeddedLibraries: try EmbeddedLibraryInspector.inspect(app: app))
     }
     func importIPA(_ source: URL) throws -> WorkspaceState {
         let temp = try temporaryDirectory()
@@ -83,7 +89,7 @@ actor WorkspaceService {
         let fileName = id.uuidString + ".ipa"
         let iconFile = parsed.icon == nil ? nil : id.uuidString + ".png"
         let package = AppPackage(id: id, name: parsed.name, bundleID: parsed.bundleID, version: parsed.version, build: parsed.build, minimumOS: parsed.minimumOS,
-                                 fileName: fileName, iconFile: iconFile, byteCount: parsed.byteCount, isEncrypted: parsed.isEncrypted, importedAt: Date())
+                                 fileName: fileName, iconFile: iconFile, byteCount: parsed.byteCount, isEncrypted: parsed.isEncrypted, importedAt: Date(), embeddedLibraries: parsed.embeddedLibraries, embeddedLibraryInspectionVersion: EmbeddedLibraryInspector.version)
         let destination = paths.library.appendingPathComponent(fileName)
         do {
             try fm.moveItem(at: parsed.snapshot, to: destination)
@@ -116,6 +122,8 @@ actor WorkspaceService {
         package.name = parsed.name; package.version = parsed.version; package.build = parsed.build; package.minimumOS = parsed.minimumOS
         package.fileName = fileName; package.iconFile = iconFile; package.byteCount = parsed.byteCount; package.isEncrypted = parsed.isEncrypted
         package.importedAt = Date()
+        package.embeddedLibraries = parsed.embeddedLibraries
+        package.embeddedLibraryInspectionVersion = EmbeddedLibraryInspector.version
         package.signedFile = nil; package.signedAt = nil; package.appleBundles = nil
         do {
             try fm.moveItem(at: parsed.snapshot, to: destination)
@@ -135,6 +143,23 @@ actor WorkspaceService {
             try? fm.removeItem(at: destination)
             if let iconFile, iconFile != old.iconFile { try? fm.removeItem(at: paths.icons.appendingPathComponent(iconFile)) }
             throw error
+        }
+    }
+    func embeddedLibraries(for target: PluginTarget) throws -> [EmbeddedLibrary] {
+        switch target {
+        case .package(let id):
+            guard let index = state.packages.firstIndex(where: { $0.id == id }) else { throw WorkspaceFailure("找不到应用。") }
+            if state.packages[index].embeddedLibraryInspectionVersion == EmbeddedLibraryInspector.version, let cached = state.packages[index].embeddedLibraries { return cached }
+            let temp = try temporaryDirectory(); defer { try? fm.removeItem(at: temp) }
+            let app = try ArchiveService.unpack(paths.library.appendingPathComponent(state.packages[index].fileName), to: temp.appendingPathComponent("Unpacked"))
+            let result = try EmbeddedLibraryInspector.inspect(app: app)
+            var next = state; next.packages[index].embeddedLibraries = result
+            next.packages[index].embeddedLibraryInspectionVersion = EmbeddedLibraryInspector.version
+            _ = try commit(next)
+            return result
+        case .container(let id):
+            guard let app = state.containerApps.first(where: { $0.id == id }) else { throw WorkspaceFailure("找不到容器应用。") }
+            return try EmbeddedLibraryInspector.inspect(app: paths.applications.appendingPathComponent(app.folder))
         }
     }
     private func validatedIdentity(p12Data: Data, profileData: Data, password: String) throws -> SigningIdentity {
@@ -638,20 +663,66 @@ actor WorkspaceService {
             throw error
         }
     }
-    private func writeContainerMetadata(_ app: ContainerApp, at directory: URL) throws {
+    @discardableResult
+    private func writeContainerMetadata(_ app: ContainerApp, at directory: URL) throws -> Bool {
         let entries = try PluginService.configuration(app.pluginInjections, legacy: app.pluginIDs ?? [], plugins: state.plugins)
         let pluginPaths = entries.map { PluginService.loadPath($0, namespace: app.id) }
-        let dict: [String: Any] = ["LCDataUUID": app.selectedContainerID.uuidString, "LCOrignalBundleIdentifier": app.bundleID, "RetoolsPluginPaths": pluginPaths,
+        let metadata = try ArchiveService.metadata(at: directory)
+        let binary = try MachOInspector.inspect(directory.appendingPathComponent(metadata["CFBundleExecutable"] as! String))
+        let options = app.runtimeOptions ?? ContainerRuntimeOptions()
+        try options.validate()
+        let metadataFile = directory.appendingPathComponent("LCAppInfo.plist")
+        let previous = (try? Data(contentsOf: metadataFile)).flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] } ?? [:]
+        var patch = previous
+        var executablePatched = false
+        if previous["RetoolsRuntimeRevision"] as? Int != 1 || (previous["dontInjectTweakLoader"] as? Bool) != !options.loaderMode.injects {
+            patch = try RTNative.configureContainer(directory.path, injectTweakLoader: options.loaderMode.injects)
+            executablePatched = true
+        }
+        var dict: [String: Any] = ["LCDataUUID": app.selectedContainerID.uuidString, "LCOrignalBundleIdentifier": app.bundleID, "RetoolsPluginPaths": pluginPaths,
                                    "RetoolsPluginEntries": entries.map { ["path": PluginService.loadPath($0, namespace: app.id), "weak": $0.loadKind == .optional] as [String: Any] },
-                                   "LCPatchRevision": 7, "dontInjectTweakLoader": true, "dontLoadTweakLoader": true,
+                                   "LCPatchRevision": 7, "RetoolsRuntimeRevision": 1,
+                                   "dontInjectTweakLoader": !options.loaderMode.injects, "dontLoadTweakLoader": !options.loaderMode.loads,
+                                   "hideLiveContainer": options.hideLiveContainer,
+                                   "fixFilePickerNew": options.fixFilePicker, "fixLocalNotification": options.fixLocalNotification,
+                                   "doUseLCBundleId": options.useHostBundleID, "doSymlinkInbox": options.legacyFilePicker,
+                                   "LCSelectedLanguage": options.language, "LCOrientationLock": options.orientation.rawValue,
+                                   "classicMode": options.classicMode, "isJITNeeded": options.launchMode == .jit,
+                                   "isLocked": options.isLocked, "isHidden": options.isHidden,
+                                   "LCTweakFolder": options.tweakFolder, "remark": options.remark,
+                                   "segCountMismatch": patch["segCountMismatch"] as? Bool ?? false,
+                                   "LCTweakLoaderCantInject": patch["LCTweakLoaderCantInject"] as? Bool ?? false,
                                    "LCContainers": app.containers.map { ["folderName": $0.folderName, "name": $0.name] },
                                    "installationDate": app.installedAt]
-        try PropertyListSerialization.data(fromPropertyList: dict, format: .binary, options: 0).write(to: directory.appendingPathComponent("LCAppInfo.plist"), options: .atomic)
+        // Guests share the host process, so UIKit would otherwise apply the
+        // host's linked-SDK rules (including iOS 27's scene lifecycle requirement).
+        // Match LiveContainer's SDK compatibility policy, including its iOS 11
+        // floor for 64-bit apps. Recompute on launch to cover existing imports.
+        if options.spoofSDKVersion, let sdk = binary.sdkVersion, sdk != 0 { dict["spoofSDKVersion"] = max(sdk, 0x000b0000) }
+        if options.classicMode {
+            let major = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+            if let cache = previous["LCClassicModeCache"] as? [String: Any], cache["systemMajorVersion"] as? Int == major { dict["LCClassicModeCache"] = cache }
+            else { dict["LCClassicModeCache"] = ["systemMajorVersion": major, "defaultClassicMode": try RTNative.containerClassicMode(directory.path)] }
+        }
+        var info = metadata
+        let bundleID = options.useHostBundleID ? (Bundle.main.bundleIdentifier ?? "dev.retools.ios") : app.bundleID
+        if info["CFBundleIdentifier"] as? String != bundleID {
+            info["CFBundleIdentifier"] = bundleID
+            try PropertyListSerialization.data(fromPropertyList: info, format: .binary, options: 0).write(to: directory.appendingPathComponent("Info.plist"), options: .atomic)
+        }
+        try fm.createDirectory(at: paths.tweaks, withIntermediateDirectories: true)
+        if !options.tweakFolder.isEmpty { try fm.createDirectory(at: paths.tweaks.appendingPathComponent(options.tweakFolder), withIntermediateDirectories: true) }
+        try PropertyListSerialization.data(fromPropertyList: dict, format: .binary, options: 0).write(to: metadataFile, options: .atomic)
+        return executablePatched
     }
     private func createData(_ container: DataContainer, bundleID: String, at base: URL? = nil) throws {
         let folder = base ?? paths.data.appendingPathComponent(container.folderName)
         for path in ["Documents", "Library/Preferences", "Library/Caches", "tmp"] { try fm.createDirectory(at: folder.appendingPathComponent(path), withIntermediateDirectories: true) }
-        let dict: [String: Any] = ["appIdentifier": bundleID, "name": container.name, "keychainGroupId": 0, "isolateAppGroup": true, "spoofIdentifierForVendor": true, "spoofedIdentifierForVendor": container.id.uuidString]
+        try writeDataMetadata(container, bundleID: bundleID, at: folder)
+    }
+    private func writeDataMetadata(_ container: DataContainer, bundleID: String, at folder: URL) throws {
+        let options = container.options ?? ContainerDataOptions()
+        let dict: [String: Any] = ["appIdentifier": bundleID, "name": container.name, "keychainGroupId": 0, "isolateAppGroup": options.isolateAppGroup, "spoofIdentifierForVendor": options.spoofIdentifierForVendor, "spoofedIdentifierForVendor": (options.identifierForVendor ?? container.id).uuidString]
         try PropertyListSerialization.data(fromPropertyList: dict, format: .binary, options: 0).write(to: folder.appendingPathComponent("LCContainerInfo.plist"), options: .atomic)
     }
     func installContainer(_ packageID: UUID) throws -> WorkspaceState {
@@ -678,6 +749,62 @@ actor WorkspaceService {
             try? fm.removeItem(at: destination); try? fm.removeItem(at: paths.data.appendingPathComponent(container.folderName)); throw error
         }
     }
+    func containerSettingChoices(_ appID: UUID) throws -> (languages: [String], tweakFolders: [String]) {
+        guard let app = state.containerApps.first(where: { $0.id == appID }) else { throw WorkspaceFailure("找不到容器应用。") }
+        let directory = paths.applications.appendingPathComponent(app.folder)
+        let info = try ArchiveService.metadata(at: directory)
+        let names = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        let languages = Set((info["CFBundleLocalizations"] as? [String] ?? []) + names.filter { $0.pathExtension == "lproj" }.map { $0.deletingPathExtension().lastPathComponent }).subtracting(["Base"]).sorted()
+        let folders = (try? fm.contentsOfDirectory(at: paths.tweaks, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])) ?? []
+        return (languages, folders.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])).map { $0.isDirectory == true && $0.isSymbolicLink != true } ?? false }.map(\.lastPathComponent).sorted())
+    }
+    func setContainerRuntimeOptions(_ appID: UUID, options: ContainerRuntimeOptions) throws -> WorkspaceState {
+        try options.validate()
+        guard let index = state.containerApps.firstIndex(where: { $0.id == appID }) else { throw WorkspaceFailure("找不到容器应用。") }
+        let app = state.containerApps[index], directory = paths.applications.appendingPathComponent(app.folder)
+        let info = try ArchiveService.metadata(at: directory)
+        let names = ["Info.plist", "LCAppInfo.plist", info["CFBundleExecutable"] as! String]
+        let temp = try temporaryDirectory(); defer { try? fm.removeItem(at: temp) }
+        for name in names { if fm.fileExists(atPath: directory.appendingPathComponent(name).path) { try fm.copyItem(at: directory.appendingPathComponent(name), to: temp.appendingPathComponent(name)) } }
+        var next = state; next.containerApps[index].runtimeOptions = options; next.containerApps[index].signedFingerprint = nil
+        do {
+            try writeContainerMetadata(next.containerApps[index], at: directory)
+            log("已更新容器设置", app.name, "slider.horizontal.3", in: &next)
+            return try commit(next)
+        } catch {
+            for name in names {
+                let backup = temp.appendingPathComponent(name), target = directory.appendingPathComponent(name)
+                if fm.fileExists(atPath: backup.path) { try? fm.removeItem(at: target); try? fm.copyItem(at: backup, to: target) }
+            }
+            throw error
+        }
+    }
+    func forceContainerSign(_ appID: UUID) throws -> WorkspaceState {
+        guard let index = state.containerApps.firstIndex(where: { $0.id == appID }) else { throw WorkspaceFailure("找不到容器应用。") }
+        var next = state; next.containerApps[index].signedFingerprint = nil
+        return try commit(next)
+    }
+    func setContainerDataOptions(_ appID: UUID, containerID: UUID, name: String, options: ContainerDataOptions) throws -> WorkspaceState {
+        guard let index = state.containerApps.firstIndex(where: { $0.id == appID }),
+              let space = state.containerApps[index].containers.firstIndex(where: { $0.id == containerID }) else { throw WorkspaceFailure("找不到数据空间。") }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 40 else { throw WorkspaceFailure("空间名称应为 1 到 40 个字符。") }
+        var next = state
+        next.containerApps[index].containers[space].name = name
+        next.containerApps[index].containers[space].options = options
+        let app = next.containerApps[index]
+        do {
+            try writeDataMetadata(app.containers[space], bundleID: app.bundleID, at: paths.data.appendingPathComponent(app.containers[space].folderName))
+            if try writeContainerMetadata(app, at: paths.applications.appendingPathComponent(app.folder)) {
+                next.containerApps[index].signedFingerprint = nil
+            }
+            return try commit(next)
+        } catch {
+            try? writeDataMetadata(state.containerApps[index].containers[space], bundleID: app.bundleID, at: paths.data.appendingPathComponent(app.containers[space].folderName))
+            try? writeContainerMetadata(state.containerApps[index], at: paths.applications.appendingPathComponent(app.folder))
+            throw error
+        }
+    }
     func addContainer(to appID: UUID, name: String) throws -> WorkspaceState {
         guard let index = state.containerApps.firstIndex(where: { $0.id == appID }) else { throw WorkspaceFailure("找不到容器应用。") }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -686,7 +813,9 @@ actor WorkspaceService {
         var next = state; next.containerApps[index].containers.append(container)
         do {
             try createData(container, bundleID: next.containerApps[index].bundleID)
-            try writeContainerMetadata(next.containerApps[index], at: paths.applications.appendingPathComponent(next.containerApps[index].folder))
+            if try writeContainerMetadata(next.containerApps[index], at: paths.applications.appendingPathComponent(next.containerApps[index].folder)) {
+                next.containerApps[index].signedFingerprint = nil
+            }
             log("已创建数据空间", name, "square.stack.3d.up", in: &next)
             return try commit(next)
         } catch {
@@ -698,7 +827,10 @@ actor WorkspaceService {
         guard let index = state.containerApps.firstIndex(where: { $0.id == appID }), state.containerApps[index].containers.contains(where: { $0.id == containerID }) else { throw WorkspaceFailure("找不到数据空间。") }
         var next = state; next.containerApps[index].selectedContainerID = containerID
         let path = paths.applications.appendingPathComponent(next.containerApps[index].folder)
-        do { try writeContainerMetadata(next.containerApps[index], at: path); return try commit(next) }
+        do {
+            if try writeContainerMetadata(next.containerApps[index], at: path) { next.containerApps[index].signedFingerprint = nil }
+            return try commit(next)
+        }
         catch { try? writeContainerMetadata(state.containerApps[index], at: path); throw error }
     }
     func resetContainer(appID: UUID, containerID: UUID) throws -> WorkspaceState {
@@ -808,7 +940,7 @@ actor WorkspaceService {
         let entries = try PluginService.configuration(app.pluginInjections, legacy: app.pluginIDs ?? [], plugins: state.plugins)
         let plugins = try PluginService.selected(PluginService.recordIDs(entries), from: state.plugins)
         let materialized = try PluginService.materialize(plugins, in: path, namespace: app.id, paths: paths)
-        try writeContainerMetadata(app, at: path)
+        let executablePatched = try writeContainerMetadata(app, at: path)
         if mode == .jit, !Self.jitRequiresSignedGuest {
             var next = state; next.containerApps[index].lastLaunched = Date()
             log("使用 JIT 启动容器", next.containerApps[index].name, "bolt.fill", in: &next)
@@ -819,7 +951,9 @@ actor WorkspaceService {
         catch let error where mode == .jit { throw WorkspaceFailure("iOS 26 起，JIT 模式也需要先用容器证书签名应用才能加载。\(error.localizedDescription)") }
         try Self.requireHostTeam(identity)
         // Loading the signed probe verifies the actual host certificate and device trust.
-        // 同一证书已检测通过时跳过：下面对客体主程序的 isSignatureTrusted 校验同样由系统实际判定。
+        // The probe validates this certificate's loading permission. F_CHECK_LV
+        // alone does not verify every code page, so old signing caches must be
+        // refreshed and every executable patch must invalidate its cache.
         if !JITLessCheckRecord.isValid(for: identity) {
             do { try RTNative.testJITLess(p12, password: password, profile: profile) }
             catch { JITLessCheckRecord.forget(); throw error }
@@ -827,7 +961,7 @@ actor WorkspaceService {
         }
         let metadata = try ArchiveService.metadata(at: path)
         let binaryPath = path.appendingPathComponent(metadata["CFBundleExecutable"] as! String).path
-        if materialized.changed || app.signedFingerprint != identity.fingerprint || !RTNative.isSignatureTrusted(binaryPath) {
+        if executablePatched || materialized.changed || app.signedRuntimeRevision != Self.containerSigningRevision || app.signedFingerprint != identity.fingerprint || !RTNative.isSignatureTrusted(binaryPath) {
             let enumerator = fm.enumerator(at: path, includingPropertiesForKeys: [.isRegularFileKey])
             var files: [String] = []
             while let file = enumerator?.nextObject() as? URL {
@@ -836,7 +970,9 @@ actor WorkspaceService {
             try RTNative.signBinaries(files, p12: p12, password: password, profile: profile, identifier: Bundle.main.bundleIdentifier ?? "com.reukix.retools")
         }
         guard RTNative.isSignatureTrusted(binaryPath) else { JITLessCheckRecord.forget(); throw WorkspaceFailure("系统未信任容器签名，请使用与 Retools 相同的签名证书。") }
-        var next = state; next.containerApps[index].signedFingerprint = identity.fingerprint; next.containerApps[index].lastLaunched = Date()
+        var next = state; next.containerApps[index].signedFingerprint = identity.fingerprint
+        next.containerApps[index].signedRuntimeRevision = Self.containerSigningRevision
+        next.containerApps[index].lastLaunched = Date()
         if mode == .jit { log("使用 JIT 启动容器", "\(app.name) · 已用容器证书签名", "bolt.fill", in: &next) }
         else { log("启动容器应用", "\(app.name) · \(app.selectedContainer?.name ?? "默认空间")", "play.fill", in: &next) }
         return try commit(next)
@@ -882,6 +1018,16 @@ actor WorkspaceService {
             try RTNative.signHostApp(app.path, credentials: files)
             if let requiredGroup, HostAppGroup.signedIdentifier(in: app) != requiredGroup {
                 throw WorkspaceFailure("签名输出未保留所需 App Group，未生成安装包。")
+            }
+            if let requiredGroup {
+                let extensions = (try? fm.contentsOfDirectory(at: app.appendingPathComponent("PlugIns"), includingPropertiesForKeys: nil)) ?? []
+                for item in extensions where item.pathExtension == "appex" {
+                    let metadata = try ArchiveService.metadata(at: item)
+                    if metadata["RetoolsRequiresSharedAppGroup"] as? Bool == true,
+                       HostAppGroup.signedIdentifier(in: item) != requiredGroup {
+                        throw WorkspaceFailure("扩展未保留与宿主相同的 App Group，未生成安装包。")
+                    }
+                }
             }
             for folder in try fm.contentsOfDirectory(at: temp, includingPropertiesForKeys: nil) where folder.lastPathComponent != app.lastPathComponent { try fm.removeItem(at: folder) }
             guard fm.fileExists(atPath: app.appendingPathComponent("Info.plist").path) else { throw WorkspaceFailure("开发签名后的宿主文件不完整。") }

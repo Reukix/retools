@@ -23,7 +23,7 @@ struct AIModelPickerView: View {
                         }.padding(.vertical, 4).contentShape(Rectangle())
                     }.disabled(chat.isGenerating).accessibilityIdentifier("ai.model." + model.id).accessibilityValue(selected == model.id ? "已选中" : "")
                 }
-            }.scrollContentBackground(.hidden).background(Palette.background).searchable(text: $search, prompt: "搜索模型").navigationTitle("选择模型").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            }.scrollContentBackground(.hidden).background(Palette.background).searchable(text: $search, prompt: "搜索模型").navigationTitle("选择模型").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
                     ToolbarItem(placement: .primaryAction) { NavigationLink { AISettingsView() } label: { Image(systemName: "slider.horizontal.3") }.accessibilityLabel("AI 接口设置").accessibilityIdentifier("ai.settings") }

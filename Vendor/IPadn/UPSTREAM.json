@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/mengangs/ipadn",
+  "commit": "e91583bd300a0cc6f7b0c16c87e21819c35e7d01",
+  "version": "1.9.0 (25)",
+  "license": "GPL-2.0-or-later",
+  "adapted": "Retools module entry, isolated persistence, host handoffs, background lifecycle, framework resources; standalone app icon and self-update controls omitted",
+  "presentation": "Retools 2026-11-11: embedded workbench NavigationStack, native push/pop and interactive back, top segmented sections, overview cards, neutral typography and Retools appearance."
+}

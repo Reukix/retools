@@ -11,7 +11,6 @@ struct LibraryView: View {
     @State private var showDelete = false
     @State private var showExpiry = false
     @State private var showSources = false
-    @State private var showDecryption = false
     @ObservedObject private var renewal = RenewalController.shared
     @ObservedObject private var sources = AppSourceStore.shared
     /// 只在使用 Apple ID 签名时展示「我的应用」卡片。
@@ -78,7 +77,6 @@ struct LibraryView: View {
                                 .accessibilityLabel("筛选应用").accessibilityValue(onlySigned ? "已签名" : "全部应用")
                         }
                         Button { showSources = true } label: { Label("软件源", systemImage: "globe") }.accessibilityIdentifier("library.sources")
-                        Button { showDecryption = true } label: { Label("应用砸壳", systemImage: "lock.open") }.accessibilityIdentifier("library.decryption")
                         Button { showImporter = true } label: { Label("导入", systemImage: "plus") }.accessibilityIdentifier("library.import")
                     }
                 }
@@ -89,8 +87,6 @@ struct LibraryView: View {
                 }
                 .navigationDestination(item: $selectedPackage) { PackageSigningView(packageID: $0.id) }
                 .navigationDestination(isPresented: $showSources) { SourcesView() }
-                .navigationDestination(isPresented: $showDecryption) { DecryptionView() }
-                .onChange(of: store.showDecryption, initial: true) { _, value in if value { showDecryption = true; store.showDecryption = false } }
                 .onChange(of: store.pendingSourceInput) { _, value in if value != nil { showSources = true } }
                 .onAppear { if store.pendingSourceInput != nil { showSources = true } }
                 .sheet(item: $detailsPackage) { PackageDetailSheet(packageID: $0.id) }
@@ -115,16 +111,16 @@ struct PackageRow: View {
         HStack(spacing: 13) {
             AppIcon(name: package.name, url: store.iconURL(package.iconFile), size: 54)
             VStack(alignment: .leading, spacing: 4) {
-                Text(package.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                Text(package.bundleID).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                Text("v\(package.version) · \(package.sizeLabel)").font(.caption).foregroundStyle(.tertiary)
+                Text(package.name).font(.headline).foregroundStyle(Color.primary).lineLimit(1)
+                Text(package.bundleID).font(.caption.monospaced()).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle)
+                Text("v\(package.version) · \(package.sizeLabel)").font(.caption).foregroundStyle(Palette.tertiaryText)
             }
             Spacer(minLength: 5)
             if package.isEncrypted { StatusPill(title: "已加密", color: .secondary) }
             else if let update = sources.update(for: package) { StatusPill(title: "可更新 v" + update.version.version) }
             else if let expiry = renewal.settings.installedExpiries[package.id.uuidString] { ExpiryBadge(expiry: expiry) }
             else if package.signedFile != nil { StatusPill(title: "已签名", color: .green) }
-            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(Palette.tertiaryText)
         }.contentShape(Rectangle()).workspaceCard(padding: 15)
     }
 }
@@ -167,20 +163,20 @@ private struct SourceUpdateRow: View {
             AppIcon(name: update.package.name, url: store.iconURL(update.package.iconFile), size: 46)
             VStack(alignment: .leading, spacing: 3) {
                 Text(update.package.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Text("v\(update.package.version) → v\(update.version.version)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Text("v\(update.package.version) → v\(update.version.version)").font(.caption.monospacedDigit()).foregroundStyle(Color.secondary)
                 if let item = sources.downloads[update.version.id] {
                     ProgressView(value: item.fraction ?? 0).tint(Palette.accent)
                     Text([item.fraction.map { $0.formatted(.percent.precision(.fractionLength(0))) }, item.sizeLabel, item.retry].compactMap { $0 }.joined(separator: " · "))
-                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                        .font(.caption2.monospacedDigit()).foregroundStyle(Color.secondary).lineLimit(1)
                 } else {
                     Text([update.sourceName, reinstalls ? "更新后自动重签并安装" : "更新后需重新签名"].joined(separator: " · "))
-                        .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                        .font(.caption2).foregroundStyle(Palette.tertiaryText).lineLimit(1)
                 }
             }
             Spacer(minLength: 6)
             if sources.isDownloading(update.version) {
                 Button { sources.cancelDownload(update.version) } label: { Image(systemName: "xmark.circle.fill").font(.title3) }
-                    .buttonStyle(.borderless).foregroundStyle(.secondary).accessibilityLabel("取消更新 \(update.package.name)")
+                    .buttonStyle(.borderless).foregroundStyle(Color.secondary).accessibilityLabel("取消更新 \(update.package.name)")
             } else {
                 Button("更新") { sources.update(update, into: store) }
                     .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).controlSize(.small)

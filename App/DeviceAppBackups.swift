@@ -105,7 +105,7 @@ struct DeviceAppIcon: View {
                 Image(uiImage: image).resizable().interpolation(.high)
             } else {
                 RoundedRectangle(cornerRadius: size * 0.225, style: .continuous).fill(.quaternary)
-                    .overlay { Image(systemName: "app").font(.system(size: size * 0.45)).foregroundStyle(.tertiary) }
+                    .overlay { Image(systemName: "app").font(.system(size: size * 0.45)).foregroundStyle(Palette.tertiaryText) }
             }
         }
         .frame(width: size, height: size)
@@ -125,7 +125,7 @@ struct DeviceTransferSection: View {
                     if let fraction = transfer.fraction { ProgressView(value: fraction) } else { ProgressView().frame(maxWidth: .infinity, alignment: .leading) }
                     HStack {
                         Text("\(transfer.files) 个文件 · \(transfer.bytes.byteLabel)" + (transfer.expected.map { " / 约 \($0.byteLabel)" } ?? ""))
-                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .font(.caption.monospacedDigit()).foregroundStyle(Color.secondary)
                         Spacer()
                         Button("取消", role: .cancel) { tools.cancelTransfer() }.font(.caption.weight(.semibold))
                     }
@@ -150,7 +150,7 @@ struct AppDataBackupRow: View {
                 Text(showsApp ? backup.appName : backup.createdAt.formatted(date: .abbreviated, time: .shortened)).lineLimit(1)
                 Text([showsApp ? backup.createdAt.formatted(date: .abbreviated, time: .shortened) : nil, backup.version.isEmpty ? nil : "v" + backup.version,
                       backup.bytes.byteLabel, backup.accessTitle].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.caption).foregroundStyle(Color.secondary).lineLimit(1)
             }
             Spacer(minLength: 6)
             Menu {
@@ -191,22 +191,22 @@ struct AppDataRestoreSheet: View {
                             HStack(spacing: 12) {
                                 DeviceAppIcon(bundleID: app.bundleID, size: 32)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(app.name).foregroundStyle(.primary)
-                                    Text(app.bundleID == backup.bundleID ? "原应用" : app.bundleID).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    Text(app.name).foregroundStyle(Color.primary)
+                                    Text(app.bundleID == backup.bundleID ? "原应用" : app.bundleID).font(.caption).foregroundStyle(Color.secondary).lineLimit(1)
                                 }
                                 Spacer()
-                                Text(app.debuggable ? "完整沙盒" : "仅文稿").font(.caption).foregroundStyle(.secondary)
+                                Text(app.debuggable ? "完整沙盒" : "仅文稿").font(.caption).foregroundStyle(Color.secondary)
                             }
                         }
                     }
-                    if candidates.isEmpty { Text("没有可以写入数据的应用。").foregroundStyle(.secondary) }
+                    if candidates.isEmpty { Text("没有可以写入数据的应用。").foregroundStyle(Color.secondary) }
                 } header: { Text("恢复到") } footer: {
                     Text("会先清空目标应用的「文稿」和「Library」（缓存除外），再写入这份备份。只能访问文稿的应用只恢复文稿。恢复前请先退出目标应用。")
                 }
             }
             .navigationTitle("恢复 \(backup.appName) 的数据").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
-            .task { await tools.loadIcons(for: candidates, renewal: renewal) }
+            .task { await tools.loadApps(renewal: renewal); await tools.loadIcons(for: candidates, renewal: renewal) }
             .confirmationDialog(target.map { "用这份备份覆盖「\($0.name)」的数据？" } ?? "", isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } }),
                                 titleVisibility: .visible, presenting: target) { app in
                 Button("覆盖并恢复", role: .destructive) {
@@ -223,24 +223,38 @@ struct AppDataBackupsView: View {
     @EnvironmentObject private var renewal: RenewalController
     @ObservedObject private var tools = DeviceToolsStore.shared
     @State private var restoring: AppDataBackup?
+    @State private var query = ""
+    private var visible: [AppDataBackup] { tools.backups.filter { query.isEmpty || $0.appName.localizedCaseInsensitiveContains(query) || $0.bundleID.localizedCaseInsensitiveContains(query) } }
 
     var body: some View {
         List {
+            ToolPageIntro(tool: .backups, title: "应用数据与存档", detail: "在本地查看历史备份，按需导出或选择应用恢复。")
+            Section {
+                ToolMetrics(items: [("本地备份", "\(tools.backups.count)"), ("占用空间", tools.backups.reduce(Int64(0)) { $0 + $1.bytes }.byteLabel)])
+                NavigationLink { DeviceAppsView() } label: { ToolActionLabel(title: "选择应用创建备份", symbol: "plus.circle") }
+            }
             DeviceTransferSection()
             if tools.backups.isEmpty {
                 ContentUnavailableView("还没有数据备份", systemImage: "externaldrive.badge.timemachine",
                                        description: Text("在「应用」里打开一个侧载应用，点「备份应用数据」。"))
+            } else if visible.isEmpty {
+                ContentUnavailableView.search(text: query)
             } else {
                 Section {
-                    ForEach(tools.backups) { backup in AppDataBackupRow(backup: backup, showsApp: true) { restoring = backup } }
-                } footer: {
+                    ForEach(visible) { backup in AppDataBackupRow(backup: backup, showsApp: true) { restoring = backup } }
+                } header: { Text("备份记录 · \(visible.count)") } footer: {
                     Text("共 \(tools.backups.count) 份，占用 \(tools.backups.reduce(Int64(0)) { $0 + $1.bytes }.byteLabel)。备份保存在 Retools 里，卸载 Retools 会一起删除，重要的请导出。")
                 }
             }
         }
-        .scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle("数据备份").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
-        .task { tools.reloadBackups(); await tools.loadIcons(for: tools.apps.filter { app in tools.backups.contains { $0.bundleID == app.bundleID } }, renewal: renewal) }
+        .toolListStyle()
+        .searchable(text: $query, prompt: "应用名称或 Bundle ID")
+        .refreshable { tools.reloadBackups() }
+        .navigationTitle("数据备份").navigationBarTitleDisplayMode(.inline)
+        .task { tools.reloadBackups() }
         .sheet(item: $restoring) { AppDataRestoreSheet(backup: $0) }
+        .alert("数据备份", isPresented: Binding(get: { tools.errorMessage != nil }, set: { if !$0 { tools.errorMessage = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: { Text(tools.errorMessage ?? "") }
     }
 }

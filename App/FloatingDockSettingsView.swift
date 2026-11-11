@@ -22,7 +22,7 @@ struct FloatingDockSettingsView: View {
                 Label("点应用切换，点栏外收起", systemImage: "app.badge")
                 Label("长按应用或主页查看更多操作", systemImage: "hand.tap")
             } header: { Text("使用方式") } footer: { Text("切换应用会重启客体进程，保留对应空间的数据。") }
-        }.scrollContentBackground(.hidden).ambientBackground().navigationTitle("悬浮侧栏").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        }.scrollContentBackground(.hidden).ambientBackground().navigationTitle("悬浮侧栏").navigationBarTitleDisplayMode(.inline)
             .onChange(of: left) { _, _ in RetoolsContainerControls.refreshPreferences() }
             .onChange(of: appearance) { _, _ in RetoolsContainerControls.refreshPreferences() }
             .onChange(of: opacity) { _, _ in RetoolsContainerControls.refreshPreferences() }

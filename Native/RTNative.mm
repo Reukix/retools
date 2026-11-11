@@ -73,7 +73,7 @@ static BOOL permittedEntitlement(id requested, id allowed) {
     }
     return allowed && [requested isEqual:allowed];
 }
-// 仅保留描述文件已明确授权的专用组；扩展和无组授权的公版继续不带 App Group。
+// 仅保留描述文件已明确授权的专用组；分享扩展与宿主共用，其他扩展不带组。
 static void configureHostAppGroup(NSMutableDictionary *entitlements, NSDictionary *info, NSString *team, BOOL mainBundle) {
     id allowed = entitlements[@"com.apple.security.application-groups"];
     id base = info[@"RetoolsFileToolsAppGroup"];
@@ -311,6 +311,14 @@ static void configureHostAppGroup(NSMutableDictionary *entitlements, NSDictionar
     NSDictionary *hostInfo = [NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Info.plist"]];
     NSString *mainID = hostInfo[@"CFBundleIdentifier"];
     if (!credentials[mainID]) return fail(error, @"缺少 Retools 的签名配置。");
+    NSMutableSet<NSString *> *sharedGroupExtensions = [NSMutableSet set];
+    NSString *plugins = [path stringByAppendingPathComponent:@"PlugIns"];
+    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:plugins error:nil]) {
+        if (![name.pathExtension isEqualToString:@"appex"]) continue;
+        NSDictionary *metadata = [NSDictionary dictionaryWithContentsOfFile:[[plugins stringByAppendingPathComponent:name] stringByAppendingPathComponent:@"Info.plist"]];
+        if ([metadata[@"RetoolsRequiresSharedAppGroup"] boolValue] && [metadata[@"CFBundleIdentifier"] isKindOfClass:NSString.class])
+            [sharedGroupExtensions addObject:metadata[@"CFBundleIdentifier"]];
+    }
     NSMutableArray *identifiers = [NSMutableArray arrayWithObject:mainID];
     for (NSString *identifier in credentials) if (![identifier isEqualToString:mainID]) [identifiers addObject:identifier];
     std::list<ZSignAsset> assets;
@@ -334,7 +342,8 @@ static void configureHostAppGroup(NSMutableDictionary *entitlements, NSDictionar
             return fail(error, @"自身续签需要为主应用和扩展分别取得匹配的描述文件。");
         entitlements[@"application-identifier"] = applicationID;
         entitlements[@"com.apple.developer.team-identifier"] = team;
-        configureHostAppGroup(entitlements, hostInfo, team, [identifier isEqualToString:mainID]);
+        configureHostAppGroup(entitlements, hostInfo, team,
+                              [identifier isEqualToString:mainID] || [sharedGroupExtensions containsObject:identifier]);
         NSMutableArray *groups = [NSMutableArray new];
         for (NSString *group in entitlements[@"keychain-access-groups"] ?: @[]) {
             if ([group isKindOfClass:NSString.class]) [groups addObject:[group stringByReplacingOccurrencesOfString:@"*" withString:identifier]];

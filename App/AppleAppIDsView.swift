@@ -20,7 +20,7 @@ struct AppleAppIDsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(alignment: .firstTextBaseline) {
                             Text("\(list.appIDs.count)").font(.system(size: 40, weight: .bold, design: .rounded))
-                            if let maximum { Text("/ \(maximum)").font(.title3.weight(.semibold)).foregroundStyle(.secondary) }
+                            if let maximum { Text("/ \(maximum)").font(.title3.weight(.semibold)).foregroundStyle(Color.secondary) }
                             Spacer()
                             if let available = list.available {
                                 Text("还能注册 \(max(0, available)) 个").font(.subheadline.weight(.semibold))
@@ -30,7 +30,7 @@ struct AppleAppIDsView: View {
                         if let maximum, maximum > 0 {
                             ProgressView(value: Double(min(list.appIDs.count, maximum)), total: Double(maximum)).tint(list.appIDs.count >= maximum ? .orange : Palette.accent)
                         }
-                        Text(account.email + " · " + account.teamID + (isFree ? " · 免费账号" : "")).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        Text(account.email + " · " + account.teamID + (isFree ? " · 免费账号" : "")).font(.caption).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle)
                     }.padding(.vertical, 4)
                 } footer: {
                     Text(isFree
@@ -38,13 +38,13 @@ struct AppleAppIDsView: View {
                          : "每个应用和应用扩展都需要单独的 App ID。")
                 }
                 Section {
-                    if list.appIDs.isEmpty { Text("还没有注册 App ID").foregroundStyle(.secondary) }
+                    if list.appIDs.isEmpty { Text("还没有注册 App ID").foregroundStyle(Color.secondary) }
                     ForEach(list.appIDs) { appID in AppleAppIDRow(appID: appID, owner: owner(of: appID.identifier)) }
                 } header: { Text("App ID · \(list.appIDs.count)") }
             } else if let failure {
                 Section { Label(failure, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
             } else {
-                Section { HStack { ProgressView(); Text("正在读取 App ID…").foregroundStyle(.secondary) } }
+                Section { HStack { ProgressView(); Text("正在读取 App ID…").foregroundStyle(Color.secondary) } }
             }
         }
         .scrollContentBackground(.hidden).ambientBackground()
@@ -88,14 +88,14 @@ private struct AppleAppIDRow: View {
                 .font(.title3).foregroundStyle(owner == nil ? Color.secondary : Palette.accent).frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
                 Text(appID.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Text(appID.identifier).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                Text(appID.identifier).font(.caption.monospaced()).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 Text(owner ?? "不是 Retools 签名的应用").font(.caption).foregroundStyle(owner == nil ? .tertiary : .secondary)
             }
             Spacer(minLength: 6)
             if let daysLeft {
                 VStack(spacing: 1) {
                     Text(daysLeft <= 0 ? "已到期" : "\(daysLeft)").font(.headline.monospacedDigit()).foregroundStyle(daysLeft <= 1 ? .orange : .primary)
-                    if daysLeft > 0 { Text("天").font(.caption2).foregroundStyle(.secondary) }
+                    if daysLeft > 0 { Text("天").font(.caption2).foregroundStyle(Color.secondary) }
                 }.frame(minWidth: 40)
             }
         }

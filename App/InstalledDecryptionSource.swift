@@ -5,6 +5,58 @@ import Darwin
 /// First verify that a specific installed bundle is readable. This probe never
 /// modifies the installed app, reads application data or runs the target binary.
 enum InstalledDecryptionSource {
+    static func bundleRoot(_ path: String?) throws -> URL {
+        guard var path else { throw WorkspaceFailure("系统没有返回应用安装位置。") }
+        if path.hasPrefix("/var/") { path = "/private" + path }
+        let prefix = "/private/var/containers/Bundle/Application/"
+        guard path.hasPrefix(prefix), !path.contains("\0"), path.utf8.count < Int(PATH_MAX) else { throw WorkspaceFailure("仅支持具体的已安装用户应用。") }
+        let parts = String(path.dropFirst(prefix.count)).components(separatedBy: "/")
+        guard parts.count == 2, UUID(uuidString: parts[0]) != nil,
+              parts[1].hasSuffix(".app"), parts[1].count > 4 else { throw WorkspaceFailure("应用安装目录无效，请重新读取应用列表。") }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    /// 仅复制字节；源安装包、签名、权限及应用数据均不修改。
+    static func copyBundle(root: URL, bundleID: String, to destination: URL) throws {
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: destination.path) else { throw WorkspaceFailure("安装包快照目标已存在。") }
+        let metadata = try LocalFileReader.read(root: root, components: ["Info.plist"], maximumBytes: 4 * 1024 * 1024)
+        guard let info = try PropertyListSerialization.propertyList(from: metadata, format: nil) as? [String: Any], info["CFBundleIdentifier"] as? String == bundleID else {
+            throw WorkspaceFailure("应用安装目录与所选应用身份不一致，请刷新列表。")
+        }
+        var count = 0, bytes: Int64 = 0
+        func copy(_ components: [String], to output: URL) throws {
+            try Task.checkCancellation()
+            guard components.count < 64 else { throw WorkspaceFailure("安装包目录层级过深。") }
+            let fd = try LocalFileReader.open(root: root, components: components, directory: true)
+            defer { Darwin.close(fd) }
+            let before = try LocalFileVersion.read(fd)
+            try fm.createDirectory(at: output, withIntermediateDirectories: false)
+            let entries = try LocalFileReader.entries(root: root, components: components, maximumCount: 100_000)
+            for entry in entries {
+                count += 1
+                guard count <= 100_000 else { throw WorkspaceFailure("安装包文件数量过多。") }
+                // Watch executables cannot be processed by the iPhone helper.
+                if components.isEmpty, entry.name == "Watch" { continue }
+                let child = components + [entry.name], file = output.appendingPathComponent(entry.name)
+                switch entry.kind {
+                case .directory: try copy(child, to: file)
+                case .file:
+                    guard entry.bytes >= 0, entry.bytes <= Int64(ArchiveService.maximumExpandedSize) - bytes else { throw WorkspaceFailure("安装包超过 8 GB。") }
+                    bytes += entry.bytes
+                    try LocalFileMutation.export(root: root, components: child, to: file)
+                case .symbolicLink, .unavailable:
+                    throw WorkspaceFailure("安装包包含无法完整读取的目录项：" + child.joined(separator: "/"))
+                }
+            }
+            guard try LocalFileVersion.read(fd) == before else { throw WorkspaceFailure("读取期间应用发生更新，请重新选择。") }
+        }
+        do {
+            try copy([], to: destination)
+            guard try Data(contentsOf: destination.appendingPathComponent("Info.plist")) == metadata else { throw WorkspaceFailure("读取期间应用信息变化，请重试。") }
+        } catch { try? fm.removeItem(at: destination); throw error }
+    }
+
     static func probe(app: DeviceInstalledApp, group: String) throws -> [String: Any] {
         guard let path = app.path else { throw WorkspaceFailure("设备服务没有返回应用安装位置。") }
         let normalized = path.hasPrefix("/var/") ? "/private" + path : path
@@ -48,10 +100,17 @@ enum InstalledDecryptionSource {
         func save() { try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]).write(to: reportURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]) }
         report["phase"] = "connecting"; save()
         do {
-            let link = LocalDeviceLink()
-            _ = try await link.connect(host: renewal.settings.hostIP, remotePort: renewal.settings.remotePort, expectedUDID: renewal.settings.deviceUDID)
+            let localApps = (try? RTNative.localInstalledApplications().compactMap { try? PropertyListSerialization.data(fromPropertyList: $0, format: .binary, options: 0) }.compactMap(DeviceInstalledApp.parse)) ?? []
+            report["localAppCount"] = localApps.count
+            var apps = localApps
+            report["listSource"] = "LaunchServices"
+            if !apps.contains(where: { $0.bundleID == "com.atebits.Tweetie2" }) {
+                let link = LocalDeviceLink()
+                _ = try await link.connect(host: renewal.settings.hostIP, remotePort: renewal.settings.remotePort, expectedUDID: renewal.settings.deviceUDID)
+                apps = try await link.installedApps(type: "User").compactMap(DeviceInstalledApp.parse)
+                report["listSource"] = "pairedDevice"
+            }
             report["phase"] = "listing"; save()
-            let apps = try await link.installedApps(type: "User").compactMap(DeviceInstalledApp.parse)
             guard let app = apps.first(where: { $0.bundleID == "com.atebits.Tweetie2" }) else { throw WorkspaceFailure("设备服务未找到已安装的 X。") }
             guard let group = HostAppGroup.signedIdentifier() else { throw WorkspaceFailure("当前签名没有文件工具专用 App Group。") }
             report["phase"] = "reading-installed-bundle"; save()

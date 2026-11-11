@@ -159,12 +159,12 @@ struct SigningRecoveryView: View {
                     Text("开发签名已安装。粘贴之前保存的恢复码，把签名证书、Apple ID 会话和配对记录恢复到新签名的钥匙串中。")
                     SecureField("恢复码", text: $code).textInputAutocapitalization(.never).autocorrectionDisabled()
                     PasteButton(payloadType: String.self) { values in if let value = values.first { migration.restore(code: value) } }
-                    Text("点击粘贴即可使用本机剪贴板中的恢复码恢复，无需发送给任何人。").font(.footnote).foregroundStyle(.secondary)
+                    Text("点击粘贴即可使用本机剪贴板中的恢复码恢复，无需发送给任何人。").font(.footnote).foregroundStyle(Color.secondary)
                     Button("恢复签名资料") { migration.restore(code: code); code = "" }.disabled(code.isEmpty || migration.isRestoring)
                 }
                 if !migration.result.isEmpty { Section { Text(migration.result) } }
                 if migration.isRestoring { ProgressView() }
-            }.navigationTitle("恢复签名资料").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            }.navigationTitle("恢复签名资料").navigationBarTitleDisplayMode(.inline)
                 .toolbar { Button("稍后恢复") { migration.needsRecovery = false } }
         }
     }

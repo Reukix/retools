@@ -33,7 +33,9 @@ struct DeviceProcessesView: View {
 
     var body: some View {
         List {
+            ToolPageIntro(tool: .processes, title: "运行中的进程", detail: "按资源占用排序，点开进程持续监控 CPU 与内存。")
             Section {
+                ToolMetrics(items: [("当前显示", "\(visible.count)"), ("占用数据", tools.loadingProcessUsage ? "更新中" : (tools.processes.contains { $0.memory != nil } ? "已采样" : "未采样"))])
                 Toggle("只看应用", isOn: $appsOnly)
                 Picker("排序", selection: $sort) { ForEach(Sort.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
             }
@@ -42,7 +44,7 @@ struct DeviceProcessesView: View {
                 Section { Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).textSelection(.enabled) }
             }
             if tools.processes.isEmpty, tools.processPhase == .idle || tools.processPhase == .loading {
-                Section { HStack { ProgressView(); Text(tools.developerImageStep ?? "正在读取进程…").foregroundStyle(.secondary) } }
+                Section { HStack { ProgressView(); Text(tools.developerImageStep ?? "正在读取进程…").foregroundStyle(Color.secondary) } }
             } else {
                 Section {
                     ForEach(visible) { process in
@@ -70,11 +72,14 @@ struct DeviceProcessesView: View {
                     }
                 }
             }
+            if visible.isEmpty, tools.processPhase == .ready {
+                ContentUnavailableView("没有匹配的进程", systemImage: "cpu", description: Text("尝试搜索其他名称，或关闭「只看应用」。"))
+            }
             if let busy = tools.busy { Section { HStack { ProgressView(); Text(busy) } } }
         }
         .searchable(text: $query, prompt: "名称或 PID")
-        .scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle("进程").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .toolListStyle()
+        .navigationTitle("进程").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { Task { await tools.loadProcesses(renewal: renewal) } } label: { Image(systemName: "arrow.clockwise") }
@@ -84,6 +89,7 @@ struct DeviceProcessesView: View {
         .refreshable { await tools.loadProcesses(renewal: renewal) }
         .task {
             await tools.loadProcesses(renewal: renewal)
+            await tools.loadApps(renewal: renewal)
             let ids = Set(tools.processes.compactMap { tools.label(for: $0).bundleID })
             await tools.loadIcons(for: (tools.apps + tools.systemApps).filter { ids.contains($0.bundleID) }, renewal: renewal)
         }
@@ -103,14 +109,14 @@ struct DeviceProcessesView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(label.title).font(.body.weight(.medium)).lineLimit(1)
-                    if let detail = label.detail { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    if let detail = label.detail { Text(detail).font(.caption).foregroundStyle(Color.secondary).lineLimit(1) }
                     if tools.liftedLimits[process.pid] != nil { StatusPill(title: "已解除上限", color: .green) }
                 }
                 HStack(spacing: 10) {
                     if let memory = process.memory { Text(memory.byteLabel).foregroundStyle(memory > 1_000_000_000 ? .orange : .secondary) }
                     if let cpu = process.cpu { Text(String(format: "CPU %.1f%%", cpu)).foregroundStyle(cpu > 50 ? .orange : .secondary) }
                     Text(DeviceProcessIcon.kindTitle(label.kind))
-                }.font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }.font(.caption.monospacedDigit()).foregroundStyle(Color.secondary)
             }
         }
     }
@@ -138,7 +144,7 @@ struct DeviceProcessDetailView: View {
                     DeviceProcessIcon(label: label, size: 48)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(label.title).font(.headline)
-                        Text([DeviceProcessIcon.kindTitle(label.kind), label.detail].compactMap { $0 }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary)
+                        Text([DeviceProcessIcon.kindTitle(label.kind), label.detail].compactMap { $0 }.joined(separator: " · ")).font(.subheadline).foregroundStyle(Color.secondary)
                     }
                 }.padding(.vertical, 4)
                 LabeledContent("PID", value: "\(process.pid)")
@@ -160,7 +166,7 @@ struct DeviceProcessDetailView: View {
             Section {
                 if let lifted {
                     Label("已解除内存上限，系统已确认", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
-                    Text("解除于 " + lifted.formatted(date: .omitted, time: .shortened) + "，持续到这个进程退出。").font(.caption).foregroundStyle(.secondary)
+                    Text("解除于 " + lifted.formatted(date: .omitted, time: .shortened) + "，持续到这个进程退出。").font(.caption).foregroundStyle(Color.secondary)
                 } else {
                     Button { Task { _ = await tools.liftMemoryLimit(process, renewal: renewal) } } label: { Label("解除内存上限", systemImage: "memorychip") }
                         .disabled(exited || tools.busy != nil).accessibilityIdentifier("process.liftLimit")
@@ -176,7 +182,7 @@ struct DeviceProcessDetailView: View {
             }
         }
         .scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle(tools.label(for: process).title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .navigationTitle(tools.label(for: process).title).navigationBarTitleDisplayMode(.inline)
         .task { await monitor() }
         .modifier(DeviceProcessAlert(pending: $pendingKill, tools: tools) { target in
             Task {
@@ -266,7 +272,7 @@ struct DeviceProcessIcon: View {
                 DeviceAppIcon(bundleID: bundleID, size: size)
             } else {
                 RoundedRectangle(cornerRadius: size * 0.225, style: .continuous).fill(.quaternary)
-                    .overlay { Image(systemName: label.kind == .daemon ? "gearshape" : "app").font(.system(size: size * 0.45)).foregroundStyle(.secondary) }
+                    .overlay { Image(systemName: label.kind == .daemon ? "gearshape" : "app").font(.system(size: size * 0.45)).foregroundStyle(Color.secondary) }
                     .frame(width: size, height: size)
             }
         }

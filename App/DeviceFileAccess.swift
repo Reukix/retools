@@ -7,9 +7,13 @@ struct DeviceFileRoot: Identifiable, Hashable {
 }
 
 enum DeviceFileAccess {
-    static let enabledKey = "RetoolsLocalFileAccessEnabled"
+    enum Mode { case device, local }
 
-    static func canBrowse(_ app: DeviceInstalledApp, locally: Bool) -> Bool { locally || app.filesAccessible }
+    static func localApp(for target: LocalFileTarget) -> DeviceInstalledApp {
+        DeviceInstalledApp(bundleID: target.root.path, name: "容器目录", version: "", build: "", signer: "",
+                           profileSigned: false, debuggable: false, fileSharing: false, bundleSize: 0, dataSize: 0,
+                           dataContainerPath: target.root.path)
+    }
 
     static func target(for app: DeviceInstalledApp, path: String, root: DeviceFileRoot? = nil) throws -> LocalFileTarget {
         guard path.hasPrefix("/") else { throw WorkspaceFailure("应用文件路径无效。") }
@@ -24,7 +28,8 @@ enum DeviceFileAccess {
     static func sharedRoots(for app: DeviceInstalledApp) -> [DeviceFileRoot] {
         var seen = Set<String>()
         return (app.groupContainerPaths ?? [:]).sorted { $0.key < $1.key }.compactMap { name, path in
-            guard let target = try? LocalFileTarget(path), target.components.isEmpty,
+            guard let target = try? LocalFileTarget(path), target.components.isEmpty, LocalFileArea.of(target) == .appGroup,
+                  target.root.path != LocalFileTarget.appGroupParent,
                   seen.insert(target.root.path).inserted else { return nil }
             return DeviceFileRoot(title: name, path: target.root.path)
         }

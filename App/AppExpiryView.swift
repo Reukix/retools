@@ -115,9 +115,9 @@ struct SignedAppCard: View {
             else { AppIcon(name: item.name, url: store.iconURL(item.package?.iconFile), size: 58) }
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.name).font(.headline).lineLimit(1)
-                Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Text(subtitle).font(.subheadline).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle)
                 Label(footnote, systemImage: "calendar")
-                    .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                    .font(.caption).foregroundStyle(Palette.tertiaryText).lineLimit(1)
             }
             Spacer(minLength: 8)
             ExpiryPill(expiry: item.expiry, busy: busy, action: refresh)
@@ -150,14 +150,14 @@ struct SignedAppsSection: View {
                 if let onShowAll {
                     Button(action: onShowAll) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(title).font(.title3.weight(.bold)).foregroundStyle(.primary)
-                            Text("\(items.count)").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right").font(.subheadline.weight(.bold)).foregroundStyle(.tertiary)
+                            Text(title).font(.title3.weight(.bold)).foregroundStyle(Color.primary)
+                            Text("\(items.count)").font(.subheadline.weight(.semibold)).foregroundStyle(Color.secondary)
+                            Image(systemName: "chevron.right").font(.subheadline.weight(.bold)).foregroundStyle(Palette.tertiaryText)
                         }
                     }.buttonStyle(.plain).accessibilityIdentifier("library.expiry").accessibilityHint("查看全部应用有效期")
                 } else {
                     Text(title).font(.title3.weight(.bold))
-                    Text("\(items.count)").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    Text("\(items.count)").font(.subheadline.weight(.semibold)).foregroundStyle(Color.secondary)
                 }
                 Spacer()
                 Button {
@@ -182,7 +182,7 @@ struct SignedAppsSection: View {
                 }.buttonStyle(.plain).foregroundStyle(Palette.accent)
             }
             if renewal.isWorking, !renewal.status.isEmpty {
-                Label(renewal.status, systemImage: "clock.arrow.circlepath").font(.caption).foregroundStyle(.secondary)
+                Label(renewal.status, systemImage: "clock.arrow.circlepath").font(.caption).foregroundStyle(Color.secondary)
             }
         }
         .onChange(of: renewal.isWorking) { _, working in
@@ -212,11 +212,11 @@ struct AppExpiryView: View {
                         .font(.title2).foregroundStyle(!renewal.settings.enabled ? Color.secondary : (blocked == nil ? Palette.accent : Color.orange))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(!renewal.settings.enabled ? "自动续签已关闭" : (blocked.map { "自动续签暂停：" + $0 } ?? "自动续签已开启")).font(.subheadline.weight(.semibold))
-                        Text(lastLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(lastLine).font(.caption).foregroundStyle(Color.secondary).lineLimit(1)
                     }
                 }.padding(.horizontal, 4)
                 SignedAppsSection(title: "我的应用")
-                Text("点按天数续签单个应用；续签需要已配对这台 iPhone 并开启回环代理。").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 4)
+                Text("点按天数续签单个应用；续签需要已配对这台 iPhone 并开启回环代理。").font(.footnote).foregroundStyle(Color.secondary).padding(.horizontal, 4)
                 // 与 AltStore「我的应用」相同的入口：查看已注册的 App ID 与剩余名额。
                 ForEach(renewal.settings.accounts.filter(\.isReady)) { account in
                     NavigationLink { AppleAppIDsView(account: account) } label: {
@@ -224,14 +224,14 @@ struct AppExpiryView: View {
                             Label(renewal.settings.accounts.count > 1 ? "\(account.email) 的 App ID" : "查看 App ID", systemImage: "app.badge.checkmark")
                                 .font(.subheadline.weight(.semibold))
                             Spacer()
-                            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+                            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(Palette.tertiaryText)
                         }.contentShape(Rectangle()).workspaceCard(padding: 15)
                     }.buttonStyle(.plain).accessibilityIdentifier("expiry.appIDs.\(account.id)")
                 }
             }.padding(.horizontal, 20).padding(.vertical, 12).frame(maxWidth: 700).frame(maxWidth: .infinity)
         }
         .ambientBackground()
-        .navigationTitle("应用有效期").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .navigationTitle("应用有效期").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if showsDone { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         }

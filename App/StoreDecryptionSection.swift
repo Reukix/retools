@@ -28,7 +28,7 @@ struct StoreDecryptionSection: View {
                         .disabled(blocked).accessibilityIdentifier("decryption.store.login")
                 }
             } header: { Text("商店账号") } footer: {
-                Text("登录拥有目标应用的账号，在这里直接下载并砸壳，无需准备 IPA。")
+                Text("登录拥有目标应用的账号，下载包含许可的加密 IPA，然后准备解密助手。")
             }
             Section {
                 HStack {
@@ -49,17 +49,17 @@ struct StoreDecryptionSection: View {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(spacing: 12) {
                                 if let artwork = app.artwork {
-                                    AsyncImage(url: artwork) { image in image.resizable().scaledToFit() } placeholder: { Image(systemName: "app").foregroundStyle(.secondary) }
+                                    AsyncImage(url: artwork) { image in image.resizable().scaledToFit() } placeholder: { Image(systemName: "app").foregroundStyle(Color.secondary) }
                                         .frame(width: 44,height: 44).clipShape(RoundedRectangle(cornerRadius: 10))
                                 } else { Image(systemName: "app").font(.title).foregroundStyle(Palette.accent).frame(width: 44,height: 44) }
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(app.name).font(.body.weight(.medium))
-                                    Text(app.bundleID).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                                    if !app.version.isEmpty { Text("v"+app.version).font(.caption).foregroundStyle(.tertiary) }
+                                    Text(app.bundleID).font(.caption.monospaced()).foregroundStyle(Color.secondary).lineLimit(1)
+                                    if !app.version.isEmpty { Text("v"+app.version).font(.caption).foregroundStyle(Palette.tertiaryText) }
                                 }
                             }
                             HStack {
-                                Button("下载并砸壳") { download(app,version: nil) }.buttonStyle(.borderedProminent)
+                                Button("下载并准备") { download(app,version: nil) }.buttonStyle(.borderedProminent)
                                     .accessibilityIdentifier("decryption.store.download."+app.bundleID)
                                 Spacer()
                                 Button("选择版本") {
@@ -73,7 +73,7 @@ struct StoreDecryptionSection: View {
                         }.padding(.vertical,6)
                     }
                 }
-            } else if didSearch && !controller.searching { Section { Text("没有找到应用，请检查名称、Bundle ID 或当前商店地区。").foregroundStyle(.secondary) } }
+            } else if didSearch && !controller.searching { Section { Text("没有找到应用，请检查名称、Bundle ID 或当前商店地区。").foregroundStyle(Color.secondary) } }
             if controller.busy {
                 Section {
                     HStack { ProgressView(); Text(controller.status.isEmpty ? "正在处理商店请求…" : controller.status) }
@@ -105,32 +105,6 @@ struct StoreDecryptionSection: View {
 }
 
 struct StoreInstalledAppSelector: View {
-    @EnvironmentObject private var renewal: RenewalController
-    @Environment(\.dismiss) private var dismiss
-    @State private var apps: [DeviceInstalledApp] = []
-    @State private var loading = true
-    @State private var error: String?
     let onSelect: (DeviceInstalledApp) -> Void
-    var body: some View {
-        NavigationStack {
-            List {
-                if loading { HStack { ProgressView(); Text("正在读取本机应用…") } }
-                if let error { Text(error).foregroundStyle(.orange) }
-                ForEach(apps) { app in
-                    Button { onSelect(app); dismiss() } label: {
-                        VStack(alignment: .leading,spacing: 4) { Text(app.name); Text(app.bundleID).font(.caption.monospaced()).foregroundStyle(.secondary) }
-                    }
-                }
-            }.navigationTitle("本机应用").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
-                .task {
-                    defer { loading = false }
-                    do {
-                        guard renewal.settings.hasPairing else { throw FairPlayFailure("请先连接设备服务，或直接返回搜索应用名称。") }
-                        _ = try await renewal.device.connect(host: renewal.settings.hostIP,remotePort: renewal.settings.remotePort,expectedUDID: renewal.settings.deviceUDID)
-                        apps = try await renewal.device.installedApps(type: "User").compactMap(DeviceInstalledApp.parse).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-                    } catch { self.error = error.localizedDescription }
-                }
-        }.tint(Palette.accent)
-    }
+    var body: some View { InstalledDecryptionSelector(onSelect: onSelect) }
 }

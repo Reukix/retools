@@ -73,6 +73,19 @@ struct DeviceProfile: Identifiable, Hashable, Sendable, Codable {
 }
 
 /// 设备上安装的用户应用（来自 installation_proxy）。
+struct DeviceAppSizeValues: Equatable, Sendable {
+    let bundle: Int64?
+    let data: Int64?
+    init(_ plist: [String: Any]) {
+        func size(_ key: String) -> Int64? {
+            guard let value = (plist[key] as? NSNumber)?.int64Value, value >= 0 else { return nil }
+            return value
+        }
+        bundle = size("StaticDiskUsage"); data = size("DynamicDiskUsage")
+    }
+    var available: Bool { bundle != nil || data != nil }
+}
+
 struct DeviceInstalledApp: Identifiable, Hashable, Sendable, Codable {
     var id: String { bundleID }
     var bundleID: String
@@ -97,6 +110,20 @@ struct DeviceInstalledApp: Identifiable, Hashable, Sendable, Codable {
     /// 由设备服务返回；旧缓存或部分系统可能不提供。
     var dataContainerPath: String?
     var groupContainerPaths: [String: String]?
+    /// 区分设备返回的 0 与尚未读取；旧缓存通过正数推断是否已有数据。
+    var bundleSizeKnown: Bool? = nil
+    var dataSizeKnown: Bool? = nil
+    var reportedBundleSize: Int64? { (bundleSizeKnown ?? (bundleSize > 0)) ? bundleSize : nil }
+    var reportedDataSize: Int64? { (dataSizeKnown ?? (dataSize > 0)) ? dataSize : nil }
+
+    mutating func apply(sizes: DeviceAppSizeValues) {
+        if let value = sizes.bundle { bundleSize = value; bundleSizeKnown = true }
+        if let value = sizes.data { dataSize = value; dataSizeKnown = true }
+    }
+    mutating func preserveSizes(from previous: Self) {
+        if reportedBundleSize == nil { bundleSize = previous.bundleSize; bundleSizeKnown = previous.bundleSizeKnown }
+        if reportedDataSize == nil { dataSize = previous.dataSize; dataSizeKnown = previous.dataSizeKnown }
+    }
 
     enum Kind: String, CaseIterable, Identifiable, Sendable {
         case sideloaded, testFlight, appStore, system
@@ -117,7 +144,7 @@ struct DeviceInstalledApp: Identifiable, Hashable, Sendable, Codable {
         guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               let bundleID = plist["CFBundleIdentifier"] as? String, !bundleID.isEmpty else { return nil }
         func text(_ key: String) -> String { plist[key] as? String ?? "" }
-        func size(_ key: String) -> Int64 { (plist[key] as? NSNumber)?.int64Value ?? 0 }
+        let sizes = DeviceAppSizeValues(plist)
         let entitlements = plist["Entitlements"] as? [String: Any] ?? [:]
         let appID = entitlements["application-identifier"] as? String ?? ""
         let display = [text("CFBundleDisplayName"), text("CFBundleName"), text("CFBundleExecutable")].first { !$0.isEmpty } ?? bundleID
@@ -125,13 +152,14 @@ struct DeviceInstalledApp: Identifiable, Hashable, Sendable, Codable {
                                   signer: text("SignerIdentity"), profileSigned: plist["ProfileValidated"] as? Bool ?? false,
                                   debuggable: entitlements["get-task-allow"] as? Bool ?? false,
                                   fileSharing: plist["UIFileSharingEnabled"] as? Bool ?? false,
-                                  bundleSize: size("StaticDiskUsage"), dataSize: size("DynamicDiskUsage"), executable: text("CFBundleExecutable"),
+                                  bundleSize: sizes.bundle ?? 0, dataSize: sizes.data ?? 0, executable: text("CFBundleExecutable"),
                                   signedAppID: appID.split(separator: ".", maxSplits: 1).dropFirst().first.map(String.init) ?? "",
                                   signedTeamID: entitlements["com.apple.developer.team-identifier"] as? String
                                       ?? appID.split(separator: ".", maxSplits: 1).first.map(String.init) ?? "",
                                   isSystem: text("ApplicationType") == "System", path: plist["Path"] as? String,
                                   dataContainerPath: plist["Container"] as? String,
-                                  groupContainerPaths: plist["GroupContainers"] as? [String: String])
+                                  groupContainerPaths: plist["GroupContainers"] as? [String: String],
+                                  bundleSizeKnown: sizes.bundle != nil, dataSizeKnown: sizes.data != nil)
     }
 }
 
@@ -619,8 +647,6 @@ final class DeviceToolsStore: ObservableObject {
 
     /// 内容来自上次的缓存、这次还没刷新成功。
     @Published private(set) var showingCache = false
-    /// 这次打开 Retools 后是否已经成功刷新过（缓存的内容可能已经过时）。
-    private(set) var refreshedThisLaunch = false
 
     private func saveSnapshot() {
         guard !backend.isSample else { return }
@@ -640,7 +666,13 @@ final class DeviceToolsStore: ObservableObject {
         systemPhase = .loading
         do {
             let raw = try await perform("读取系统应用", renewal, timeout: 60) { backend in try await backend.installedApps(type: "System") }
-            systemApps = raw.compactMap(DeviceInstalledApp.parse).map { var app = $0; app.isSystem = true; return app }
+            let previous = Dictionary(systemApps.map { ($0.bundleID, $0) }, uniquingKeysWith: { first, _ in first })
+            systemApps = raw.compactMap(DeviceInstalledApp.parse).map {
+                var app = $0; app.isSystem = true
+                if let old = previous[app.bundleID] { app.preserveSizes(from: old) }
+                if let sizes = appSizeValues[app.bundleID] { app.apply(sizes: sizes) }
+                return app
+            }
             systemPhase = .ready
         } catch { systemPhase = .failed(error.localizedDescription) }
     }
@@ -707,61 +739,136 @@ final class DeviceToolsStore: ObservableObject {
         connected = false; needsFreshLink = true
     }
 
-    func refresh(renewal: RenewalController) async {
-        guard phase != .loading else { return }
-        phase = .loading
+    @Published private(set) var appsPhase: Phase = .idle
+    @Published private(set) var profilesPhase: Phase = .idle
+    @Published private(set) var infoPhase: Phase = .idle
+
+    /// 应用枚举只依赖安装服务，不等待描述文件、诊断或开发者镜像。
+    func loadApps(renewal: RenewalController) async {
+        guard appsPhase != .loading else { return }
+        appsPhase = .loading
         do {
-            let rawProfiles = try await perform("读取描述文件", renewal) { backend in try await backend.provisioningProfiles() }
-            let rawApps = try await perform("读取应用列表", renewal) { backend in try await backend.installedApps(type: "User") }
-            profiles = rawProfiles.compactMap(DeviceProfile.parse).sorted { ($0.expires ?? .distantFuture) > ($1.expires ?? .distantFuture) }
-            // 大小单独在后台读取，先沿用上次读到的数值。
+            let raw = try await perform("读取应用列表", renewal) { try await $0.installedApps(type: "User") }
             let previous = Dictionary(apps.map { ($0.bundleID, $0) }, uniquingKeysWith: { first, _ in first })
-            apps = rawApps.compactMap(DeviceInstalledApp.parse).map { app in
+            apps = raw.compactMap(DeviceInstalledApp.parse).map { app in
                 var app = app
-                if let old = previous[app.bundleID] { app.bundleSize = old.bundleSize; app.dataSize = old.dataSize }
+                if let old = previous[app.bundleID] { app.preserveSizes(from: old) }
+                if let sizes = appSizeValues[app.bundleID] { app.apply(sizes: sizes) }
                 return app
             }
             usage = DeviceProfileAnalysis.usage(of: profiles, apps: apps)
-            let general = try await perform("读取设备信息", renewal) { backend in try await backend.lockdownValues(domain: nil) }
-            let disk = try? await perform("读取存储空间", renewal, retry: false) { backend in try await backend.lockdownValues(domain: "com.apple.disk_usage") }
-            let battery = try? await perform("读取电量", renewal, retry: false) { backend in try await backend.lockdownValues(domain: "com.apple.mobile.battery") }
+            appsPhase = .ready; saveSnapshot()
+        } catch { appsPhase = .failed(error.localizedDescription) }
+    }
+
+    func loadProfiles(renewal: RenewalController) async {
+        guard profilesPhase != .loading else { return }
+        profilesPhase = .loading
+        do {
+            let raw = try await perform("读取描述文件", renewal) { try await $0.provisioningProfiles() }
+            profiles = raw.compactMap(DeviceProfile.parse).sorted { ($0.expires ?? .distantFuture) > ($1.expires ?? .distantFuture) }
+            usage = DeviceProfileAnalysis.usage(of: profiles, apps: apps)
+            profilesPhase = .ready; saveSnapshot()
+        } catch { profilesPhase = .failed(error.localizedDescription) }
+    }
+
+    func loadDeviceInfo(renewal: RenewalController) async {
+        guard infoPhase != .loading else { return }
+        infoPhase = .loading
+        do {
+            let general = try await perform("读取设备信息", renewal) { try await $0.lockdownValues(domain: nil) }
+            // 基础信息先显示，附加诊断不可用时仍保留设备信息。
+            info = DeviceInfoSummary.parse(general: general, disk: nil, battery: nil)
+            let disk = try? await perform("读取存储空间", renewal, retry: false) { try await $0.lockdownValues(domain: "com.apple.disk_usage") }
+            let battery = try? await perform("读取电量", renewal, retry: false) { try await $0.lockdownValues(domain: "com.apple.mobile.battery") }
             info = DeviceInfoSummary.parse(general: general, disk: disk, battery: battery)
-            // 电池健康来自诊断服务；读不到时只是少一块信息，不影响其他内容。
-            if let registry = try? await perform("读取电池健康", renewal, retry: false, { backend in try await backend.batteryRegistry() }) { info?.batteryHealth = DeviceBatteryHealth.parse(registry) }
-            developerImageMounted = try? await perform("检查开发者镜像", renewal, retry: false) { backend in try await backend.isDeveloperImageMounted() }
-            updatedAt = Date()
-            phase = .ready
-            showingCache = false
-            refreshedThisLaunch = true
-            saveSnapshot()
+            if let registry = try? await perform("读取电池健康", renewal, retry: false, { try await $0.batteryRegistry() }) {
+                info?.batteryHealth = DeviceBatteryHealth.parse(registry)
+            }
+            infoPhase = .ready; saveSnapshot()
+        } catch { infoPhase = .failed(error.localizedDescription) }
+    }
+
+    func refresh(renewal: RenewalController) async {
+        guard phase != .loading else { return }
+        phase = .loading
+        await loadApps(renewal: renewal)
+        await loadProfiles(renewal: renewal)
+        await loadDeviceInfo(renewal: renewal)
+        let failures = [appsPhase, profilesPhase, infoPhase].compactMap { phase -> String? in
+            if case .failed(let message) = phase { return message }; return nil
+        }
+        showingCache = !failures.isEmpty
+        if failures.isEmpty {
+            updatedAt = Date(); phase = .ready; saveSnapshot()
             Task { await loadAppSizes(renewal: renewal) }
+        } else { phase = .failed(failures.joined(separator: "\n")) }
+    }
+
+    @Published private(set) var sizesPhase: Phase = .idle
+    var loadingSizes: Bool { sizesPhase == .loading }
+    private var sizeRequest: Task<Void, Never>?
+    private var appSizeValues: [String: DeviceAppSizeValues] = [:]
+    private var sizesUpdatedAt: Date?
+
+    /// 由数据服务持有请求，进入详情或返回时不取消；图标读取不阻塞大小读取。
+    func loadAppSizes(renewal: RenewalController, force: Bool = false) async {
+        if let request = sizeRequest { await request.value; return }
+        if !force, sizesPhase == .ready, let updated = sizesUpdatedAt, Date().timeIntervalSince(updated) < 60 { return }
+        sizesPhase = .loading
+        let request = Task { await readAppSizes(renewal: renewal) }
+        sizeRequest = request
+        await request.value
+    }
+
+    private func readAppSizes(renewal: RenewalController) async {
+        defer { sizeRequest = nil }
+        do {
+            let raw = try await perform("读取应用大小", renewal, timeout: 90, retry: false, resetsConnection: false) { backend in
+                try await backend.appSizes(type: "Any")
+            }
+            var received: [String: DeviceAppSizeValues] = [:]
+            for data in raw {
+                guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                      let id = plist["CFBundleIdentifier"] as? String, !id.isEmpty else { continue }
+                let values = DeviceAppSizeValues(plist)
+                if values.available { received[id] = values }
+            }
+            guard !received.isEmpty else { throw WorkspaceFailure("设备没有返回应用与数据大小，请重试读取。") }
+            appSizeValues.merge(received) { _, fresh in fresh }
+            func updating(_ values: [DeviceInstalledApp]) -> [DeviceInstalledApp] {
+                values.map { value in
+                    var app = value
+                    if let sizes = received[app.bundleID] { app.apply(sizes: sizes) }
+                    return app
+                }
+            }
+            apps = updating(apps); systemApps = updating(systemApps)
+            sizesUpdatedAt = Date(); sizesPhase = .ready; saveSnapshot()
+        } catch is CancellationError {
+            sizesPhase = .idle
         } catch {
-            // 有缓存时保留上次的内容，只提示刷新失败。
-            if updatedAt != nil, !apps.isEmpty { phase = .ready; showingCache = true; errorMessage = "刷新失败，显示的是上次读取的内容：\(error.localizedDescription)" }
-            else { phase = .failed(error.localizedDescription) }
+            sizesPhase = .failed(error.localizedDescription)
         }
     }
 
-    @Published private(set) var loadingSizes = false
-
-    /// 应用大小要设备逐个计算，十几秒；在独立连接上后台读取，读完更新列表。
-    func loadAppSizes(renewal: RenewalController) async {
-        guard !loadingSizes else { return }
-        loadingSizes = true
-        defer { loadingSizes = false }
-        guard let raw = try? await perform("读取应用大小", renewal, timeout: 90, retry: false, resetsConnection: false, { backend in try await backend.appSizes(type: "User") }) else { return }
-        var sizes: [String: (Int64, Int64)] = [:]
-        for data in raw {
-            guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-                  let id = plist["CFBundleIdentifier"] as? String else { continue }
-            sizes[id] = ((plist["StaticDiskUsage"] as? NSNumber)?.int64Value ?? 0, (plist["DynamicDiskUsage"] as? NSNumber)?.int64Value ?? 0)
+    func checkAppSizeReading(renewal: RenewalController, report: URL) async {
+        await loadApps(renewal: renewal)
+        await loadAppSizes(renewal: renewal, force: true)
+        var result: [String: Any] = ["checkedAt": Date().timeIntervalSince1970, "appCount": apps.count,
+                                     "bundleSizeCount": apps.filter { $0.reportedBundleSize != nil }.count,
+                                     "dataSizeCount": apps.filter { $0.reportedDataSize != nil }.count]
+        switch sizesPhase {
+        case .ready: result["phase"] = "complete"
+        case .failed(let message): result["phase"] = "failed"; result["error"] = message
+        default: result["phase"] = "incomplete"
         }
-        apps = apps.map { app in
-            var app = app
-            if let size = sizes[app.bundleID] { app.bundleSize = size.0; app.dataSize = size.1 }
-            return app
+        if let host = apps.first(where: { $0.bundleID == Bundle.main.bundleIdentifier }) {
+            result["hostBundleSize"] = host.reportedBundleSize
+            result["hostDataSize"] = host.reportedDataSize
         }
-        saveSnapshot()
+        do { try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]).write(to: report, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]) }
+        catch { errorMessage = error.localizedDescription }
     }
 
     func removeProfiles(_ targets: [DeviceProfile], renewal: RenewalController) async {
@@ -780,7 +887,7 @@ final class DeviceToolsStore: ObservableObject {
         AuthDiagnostics.record(stage: "设备工具", message: "删除描述文件 \(targets.count - failures.count)/\(targets.count) 份，副本已保存")
         trash = DeviceProfileTrash.entries()
         if !failures.isEmpty { errorMessage = "有 \(failures.count) 份描述文件没有删除：\n" + failures.prefix(3).joined(separator: "\n") }
-        await refresh(renewal: renewal)
+        await loadProfiles(renewal: renewal)
     }
 
     // MARK: 最近删除
@@ -802,7 +909,7 @@ final class DeviceToolsStore: ObservableObject {
         trash = DeviceProfileTrash.entries()
         AuthDiagnostics.record(stage: "设备工具", message: "恢复描述文件 \(entries.count - failures.count)/\(entries.count) 份")
         if !failures.isEmpty { errorMessage = "有 \(failures.count) 份描述文件没有恢复：\n" + failures.prefix(3).joined(separator: "\n") }
-        await refresh(renewal: renewal)
+        await loadProfiles(renewal: renewal)
     }
 
     func discardTrash(_ entries: [DeviceProfileTrash.Entry]) {
@@ -819,7 +926,7 @@ final class DeviceToolsStore: ObservableObject {
             AuthDiagnostics.record(stage: "设备工具", message: "已卸载 \(app.bundleID)")
         } catch { errorMessage = "卸载失败：\(error.localizedDescription)" }
         busy = nil
-        await refresh(renewal: renewal)
+        await loadApps(renewal: renewal)
     }
 
     // MARK: 沙盒文件
@@ -906,7 +1013,13 @@ final class DeviceToolsStore: ObservableObject {
 
     /// 下载（首次）→ 校验 → 设备向 Apple 申请本机签名并挂载。重启手机后需要重新挂载，文件不用重新下载。
     func mountDeveloperImage(renewal: RenewalController) async {
-        guard developerImageStep == nil, busy == nil else { return }
+        guard busy == nil else { return }
+        await prepareDeveloperImage(renewal: renewal)
+    }
+
+    /// 开发操作可能已持有 busy；内部准备不能被自己的操作状态拦截。
+    private func prepareDeveloperImage(renewal: RenewalController) async {
+        guard developerImageStep == nil else { return }
         defer { developerImageStep = nil }
         let started = Date()
         do {
@@ -959,10 +1072,10 @@ final class DeviceToolsStore: ObservableObject {
         let mounted = try? await perform("检查开发者镜像", renewal, retry: true) { backend in try await backend.isDeveloperImageMounted() }
         if mounted == true { developerImageMounted = true; return }
         guard DeveloperDiskImage.autoMountEnabled || backend.isSample else {
-            throw WorkspaceFailure("这项功能需要先挂载开发者镜像。请在设备工具首页点「挂载」。")
+            throw WorkspaceFailure("这项功能需要先挂载开发者镜像。请在「工具 → 开发者镜像」中挂载。")
         }
         let previousError = errorMessage
-        await mountDeveloperImage(renewal: renewal)
+        await prepareDeveloperImage(renewal: renewal)
         guard developerImageMounted == true else {
             let message = errorMessage ?? "开发者镜像没有挂载成功。"
             errorMessage = previousError
@@ -972,18 +1085,6 @@ final class DeviceToolsStore: ObservableObject {
 
     /// 镜像在重启后会被卸载；记住的「已挂载」状态可能过期，相关功能失败时调用它重新检查。
     func forgetDeveloperImageState() { developerImageMounted = nil }
-
-    private var autoMountAttempted = false
-    /// Retools 启动后检查一次：下载过镜像、开了自动挂载、已配对时，静默挂载。失败只记诊断，不打扰。
-    func autoMountOnLaunch(renewal: RenewalController) async {
-        guard !autoMountAttempted, !backend.isSample, DeveloperDiskImage.autoMountEnabled, DeveloperDiskImage.isDownloaded(),
-              renewal.settings.hasPairing else { return }
-        autoMountAttempted = true
-        let previousError = errorMessage
-        do { try await ensureDeveloperImage(renewal: renewal) }
-        catch { AuthDiagnostics.record(stage: "开发者镜像", message: "启动时自动挂载未完成：\(error.localizedDescription)") }
-        errorMessage = previousError
-    }
 
     // MARK: 进程
 
@@ -1189,7 +1290,7 @@ final class DeviceToolsStore: ObservableObject {
             let file = Self.iconFolder.appendingPathComponent(app.bundleID + ".png")
             if let image = UIImage(contentsOfFile: file.path) { icons[app.bundleID] = image } else { missing.append(app.bundleID) }
         }
-        guard !missing.isEmpty, phase == .ready || backend.isSample else { return }
+        guard !missing.isEmpty, phase == .ready || appsPhase == .ready || systemPhase == .ready || backend.isSample else { return }
         iconRequests.formUnion(missing)
         defer { iconRequests.subtract(missing) }
         for batch in stride(from: 0, to: missing.count, by: 40).map({ Array(missing[$0..<min($0 + 40, missing.count)]) }) {

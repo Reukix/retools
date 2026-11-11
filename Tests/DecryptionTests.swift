@@ -193,6 +193,35 @@ final class DecryptionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: payload.appendingPathComponent("Target")), before)
         XCTAssertEqual(try Data(contentsOf: app.appendingPathComponent("Target")), before)
     }
+    func testInstalledSnapshotPreservesSourceAndPreparesLicensedHelper() throws {
+        let installed = try source(framework: true)
+        let original = try Data(contentsOf: installed.appendingPathComponent("Target"))
+        let originalLicense = try Data(contentsOf: installed.appendingPathComponent("SC_Info/Target.sinf"))
+        let snapshot = root.appendingPathComponent("Snapshot.app")
+        try InstalledDecryptionSource.copyBundle(root: installed, bundleID: "com.example.target", to: snapshot)
+        XCTAssertEqual(try Data(contentsOf: snapshot.appendingPathComponent("Target")), original)
+        XCTAssertEqual(try Data(contentsOf: snapshot.appendingPathComponent("SC_Info/Target.sinf")), originalLicense)
+        let job = try DecryptionPreparation.prepare(source: ipa(snapshot), template: DecryptionPreparation.templateURL(), root: root.appendingPathComponent("InstalledJobs"))
+        XCTAssertEqual(job.manifest.encryptedCount, 2)
+        XCTAssertEqual(try Data(contentsOf: installed.appendingPathComponent("Target")), original)
+        XCTAssertEqual(try Data(contentsOf: installed.appendingPathComponent("SC_Info/Target.sinf")), originalLicense)
+    }
+    func testInstalledSnapshotRejectsWrongIdentityAndSymlinksWithoutLeavingPartialCopy() throws {
+        let installed = try source(), snapshot = root.appendingPathComponent("Rejected.app")
+        XCTAssertThrowsError(try InstalledDecryptionSource.copyBundle(root: installed, bundleID: "com.example.wrong", to: snapshot))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: snapshot.path))
+        try FileManager.default.createSymbolicLink(atPath: installed.appendingPathComponent("Outside").path, withDestinationPath: root.path)
+        XCTAssertThrowsError(try InstalledDecryptionSource.copyBundle(root: installed, bundleID: "com.example.target", to: snapshot))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: snapshot.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: installed.appendingPathComponent("Target").path))
+    }
+    func testInstalledBundleTargetRejectsParentsAndPathTraversal() throws {
+        let base = "/var/containers/Bundle/Application/11111111-1111-4111-8111-111111111111"
+        XCTAssertEqual(try InstalledDecryptionSource.bundleRoot(base + "/Target.app").path, "/private" + base + "/Target.app")
+        for path in [base, base + "/Target.app/../Other.app", base + "/.app", base + "/Target.app/", base + "/Target.app/a", "/Applications/Target.app"] {
+            XCTAssertThrowsError(try InstalledDecryptionSource.bundleRoot(path), path)
+        }
+    }
     func testPreparationMissingLicenseDoesNotReplacePreviousJob() throws {
         let jobs = root.appendingPathComponent("Jobs")
         try FileManager.default.createDirectory(at: jobs, withIntermediateDirectories: true)

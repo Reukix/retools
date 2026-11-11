@@ -7,12 +7,12 @@ enum ContainerExecutionMode: String, CaseIterable, Identifiable {
 }
 
 enum WorkspaceTab: String, CaseIterable {
-    case library, chat, containers, settings
+    case library, chat, containers, tools, settings
     var title: String {
-        switch self { case .library: return "应用库"; case .chat: return "AI"; case .containers: return "容器"; case .settings: return "设置" }
+        switch self { case .library: return "应用库"; case .chat: return "AI"; case .containers: return "容器"; case .tools: return "工具"; case .settings: return "设置" }
     }
     var symbol: String {
-        switch self { case .library: return "square.grid.2x2"; case .chat: return "bubble.left.and.bubble.right"; case .containers: return "shippingbox"; case .settings: return "gearshape" }
+        switch self { case .library: return "square.grid.2x2"; case .chat: return "bubble.left.and.bubble.right"; case .containers: return "shippingbox"; case .tools: return "wrench.and.screwdriver"; case .settings: return "gearshape" }
     }
 }
 
@@ -36,6 +36,8 @@ struct AppPackage: Identifiable, Codable, Hashable, Sendable {
     var appleBundles: [AppleBundleRequest]?
     var pluginIDs: [UUID]?
     var pluginInjections: [PluginInjection]?
+    var embeddedLibraries: [EmbeddedLibrary]?
+    var embeddedLibraryInspectionVersion: Int?
     var signingOptions: PackageSigningOptions?
     var sizeLabel: String { ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file) }
 }
@@ -44,6 +46,7 @@ struct DataContainer: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var name: String
     var createdAt: Date
+    var options: ContainerDataOptions?
     var folderName: String { id.uuidString }
 }
 
@@ -60,9 +63,38 @@ struct ContainerApp: Identifiable, Codable, Hashable, Sendable {
     var installedAt: Date
     var lastLaunched: Date?
     var signedFingerprint: String?
+    var signedRuntimeRevision: Int?
     var pluginIDs: [UUID]?
     var pluginInjections: [PluginInjection]?
+    var runtimeOptions: ContainerRuntimeOptions?
     var selectedContainer: DataContainer? { containers.first { $0.id == selectedContainerID } }
+}
+
+struct EmbeddedLibrary: Codable, Hashable, Identifiable, Sendable {
+    var path: String
+    var byteCount: Int64
+    var isFramework: Bool
+    var linkedBy: [String]
+    var weakLinkedBy: [String]
+    var isPresent: Bool
+    var minimumOS: String?
+    var dependencies: [MachODependency]
+    var pluginEvidence: [EmbeddedPluginEvidence]?
+    var id: String { path }
+    var name: String { (path as NSString).lastPathComponent }
+    var linkageLabel: String { linkedBy.isEmpty ? "随包携带" : (linkedBy.count == weakLinkedBy.count ? "已链接 · 弱链接" : "已链接") }
+    var isInjectedPlugin: Bool { !(pluginEvidence ?? []).isEmpty && !isInjectionSupport }
+    var isInjectionSupport: Bool { Self.isInjectionSupport(path: path) }
+    static func isInjectionSupport(path: String) -> Bool {
+        let base = (((path as NSString).lastPathComponent) as NSString).deletingPathExtension.lowercased()
+        let unversioned = String(base.split(separator: ".").first ?? Substring(base))
+        let support = Set(["libsubstrate", "substrate", "cydiasubstrate", "libsubstitute", "substitute", "libellekit", "ellekit", "libhooker", "loadcontrol", "tweakloader", "retoolspluginloader", "sideloadfixer", "sideloadfixerlol", "sideloadkeychainfix"])
+        return support.contains(unversioned) || base.hasPrefix("libswift") || base.hasPrefix("libclang_rt")
+    }
+}
+enum EmbeddedPluginEvidence: String, Codable, Hashable, Sendable {
+    case appendedLoadCommand, loaderManifest, tweakFilter, loaderDirectory
+    var title: String { switch self { case .appendedLoadCommand: return "追加的加载命令"; case .loaderManifest: return "插件加载清单"; case .tweakFilter: return "插件匹配配置"; case .loaderDirectory: return "插件加载器目录" } }
 }
 
 struct SigningIdentity: Identifiable, Codable, Hashable, Sendable {
@@ -190,12 +222,13 @@ struct WorkspacePaths: Sendable {
     var icons: URL { support.appendingPathComponent("Icons") }
     var credentials: URL { support.appendingPathComponent("Credentials") }
     var plugins: URL { support.appendingPathComponent("Plugins") }
+    var tweaks: URL { documents.appendingPathComponent("Tweaks") }
     var applications: URL { documents.appendingPathComponent("Applications") }
     var data: URL { documents.appendingPathComponent("Data/Application") }
     var staging: URL { support.appendingPathComponent("Staging") }
     var state: URL { support.appendingPathComponent("workspace.json") }
     func createDirectories() throws {
-        for url in [library, exports, icons, credentials, plugins, applications, data, staging] {
+        for url in [library, exports, icons, credentials, plugins, tweaks, applications, data, staging] {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         }
     }

@@ -18,12 +18,12 @@ struct AppleCertificatesView: View {
             if let list {
                 Section {
                     LabeledContent("证书", value: list.maximum.map { "\(list.certificates.count) / \($0)" } ?? "\(list.certificates.count)")
-                    Text(account.email + " · " + account.teamID).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    Text(account.email + " · " + account.teamID).font(.caption).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle)
                 } footer: {
                     Text("开发证书数量有上限（免费账号通常为 2 张），达到上限后无法再取得新证书。撤销后，用这张证书签名的应用会立即无法打开，需要重新签名安装。")
                 }
                 Section {
-                    if list.certificates.isEmpty { Text("没有开发证书").foregroundStyle(.secondary) }
+                    if list.certificates.isEmpty { Text("没有开发证书").foregroundStyle(Color.secondary) }
                     ForEach(list.certificates) { certificate in
                         CertificateRow(certificate: certificate, usage: usage(of: certificate))
                             .swipeActions { Button("撤销", systemImage: "xmark.seal") { revoking = certificate }.tint(.red) }
@@ -36,7 +36,7 @@ struct AppleCertificatesView: View {
             } else if let failure {
                 Section { Label(failure, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
             } else {
-                Section { HStack { ProgressView(); Text("正在读取证书…").foregroundStyle(.secondary) } }
+                Section { HStack { ProgressView(); Text("正在读取证书…").foregroundStyle(Color.secondary) } }
             }
         }
         .scrollContentBackground(.hidden).ambientBackground()
@@ -101,18 +101,18 @@ private struct CertificateRow: View {
                 .foregroundStyle(usage.runsRetools ? Palette.accent : Color.secondary).frame(width: 28)
             VStack(alignment: .leading, spacing: 4) {
                 Text(certificate.machineName ?? certificate.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Text(certificate.serialNumber).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                Text(certificate.serialNumber).font(.caption.monospaced()).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 HStack(spacing: 6) {
                     if usage.runsRetools { StatusPill(title: "Retools 正在使用") }
                     if certificate.machineName == "Retools" && !usage.runsRetools { StatusPill(title: "Retools 创建", color: .secondary) }
                 }
-                if !usage.apps.isEmpty { Text("已安装：" + usage.apps.joined(separator: "、")).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                if !usage.apps.isEmpty { Text("已安装：" + usage.apps.joined(separator: "、")).font(.caption).foregroundStyle(Color.secondary).lineLimit(2) }
             }
             Spacer(minLength: 6)
             if let daysLeft {
                 VStack(spacing: 1) {
                     Text(daysLeft <= 0 ? "已过期" : "\(daysLeft)").font(.headline.monospacedDigit()).foregroundStyle(daysLeft <= 7 ? .orange : .primary)
-                    if daysLeft > 0 { Text("天").font(.caption2).foregroundStyle(.secondary) }
+                    if daysLeft > 0 { Text("天").font(.caption2).foregroundStyle(Color.secondary) }
                 }.frame(minWidth: 40)
             }
         }.padding(.vertical, 2)

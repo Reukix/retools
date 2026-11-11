@@ -11,7 +11,7 @@ struct AIAttachmentPreview: View {
             Group {
                 if let file { AIQuickLookController(file: file, title: title) }
                 else { ContentUnavailableView("附件暂不可用", systemImage: "doc.questionmark") }
-            }.navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            }.navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.accessibilityIdentifier("ai.preview.close") } }
         }.tint(AIInterface.tint)
     }

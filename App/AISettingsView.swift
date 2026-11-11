@@ -46,14 +46,14 @@ struct AISettingsView: View {
                             address = chat.configuration.endpoint(for: provider).address
                             loadSavedKey()
                         } label: {
-                            HStack { Text(provider.title); Spacer(); Text(URL(string: chat.configuration.endpoint(for: provider).address)?.host ?? "").font(.caption).foregroundStyle(.secondary) }
+                            HStack { Text(provider.title); Spacer(); Text(URL(string: chat.configuration.endpoint(for: provider).address)?.host ?? "").font(.caption).foregroundStyle(Color.secondary) }
                         }
                     }
                 }
             }
             if let error { Section { Text(error).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("ai.settings.error") } }
-            Section { Text("密钥保存在设备钥匙串。读取模型仅访问你填写的服务，不会发送对话或生成内容。").font(.footnote).foregroundStyle(.secondary) }
-        }.scrollContentBackground(.hidden).background(Palette.background).disabled(chat.isGenerating || connecting).navigationTitle("AI 接口").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            Section { Text("密钥保存在设备钥匙串。读取模型仅访问你填写的服务，不会发送对话或生成内容。").font(.footnote).foregroundStyle(Color.secondary) }
+        }.scrollContentBackground(.hidden).background(Palette.background).workbenchNavigation().disabled(chat.isGenerating || connecting).navigationTitle("AI 接口").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { connectionTask?.cancel(); dismiss() }.tint(AIInterface.tint) }
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { connect() }.tint(AIInterface.tint).disabled(chat.isGenerating || connecting || scope == nil).accessibilityIdentifier("ai.settings.save") }

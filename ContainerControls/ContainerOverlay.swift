@@ -3,6 +3,7 @@ import UIKit
 import ImageIO
 
 private struct ControlSpace: Decodable { let id: UUID; let name: String }
+private struct ControlRuntimeOptions: Decodable { let isHidden: Bool? }
 private struct ControlApp: Decodable, Identifiable {
     let id: UUID
     let name: String
@@ -10,6 +11,7 @@ private struct ControlApp: Decodable, Identifiable {
     let iconFile: String?
     let selectedContainerID: UUID
     let containers: [ControlSpace]
+    var runtimeOptions: ControlRuntimeOptions?
     var spaceName: String { containers.first { $0.id == selectedContainerID }?.name ?? "默认空间" }
 }
 private struct ControlWorkspace: Decodable { let containerApps: [ControlApp] }
@@ -74,7 +76,7 @@ private final class OverlayModel: ObservableObject {
                 let url = support.appendingPathComponent("workspace.json"), values = try url.resourceValues(forKeys: [.fileSizeKey, .isSymbolicLinkKey])
                 guard values.isSymbolicLink != true, (values.fileSize ?? Int.max) < 10_000_000 else { throw ContainerControlFailure("无法读取容器应用列表。") }
                 apps = try JSONDecoder().decode(ControlWorkspace.self, from: Data(contentsOf: url)).containerApps.filter { app in
-                    app.folder == app.id.uuidString + ".app" && app.containers.contains { $0.id == app.selectedContainerID }
+                    app.folder == app.id.uuidString + ".app" && app.runtimeOptions?.isHidden != true && app.containers.contains { $0.id == app.selectedContainerID }
                 }
             } catch { message = "应用列表读取失败，请返回 Retools 后重试。"; apps = [] }
         }

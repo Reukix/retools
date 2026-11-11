@@ -31,7 +31,7 @@ struct SigningProgressSheet: View {
                     DisclosureGroup(isExpanded: $showLog) {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(Array(progress.log.enumerated()), id: \.offset) { _, line in
-                                Text(line).font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                                Text(line).font(.caption2.monospaced()).foregroundStyle(Color.secondary).textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }.padding(.top, 8)
@@ -60,7 +60,7 @@ struct SigningProgressSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.title3.weight(.bold)).lineLimit(2)
                 TimelineView(.periodic(from: progress.startedAt, by: 1)) { context in
-                    Text(subtitle(now: context.date)).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                    Text(subtitle(now: context.date)).font(.subheadline).foregroundStyle(Color.secondary).monospacedDigit()
                 }
             }
             Spacer(minLength: 0)
@@ -89,7 +89,7 @@ struct SigningProgressSheet: View {
                 Text("\(progress.stages.filter { [.done, .skipped].contains(progress.states[$0]) }.count)/\(progress.stages.count) 个步骤")
                 Spacer()
                 Text("\(Int((progress.overall * 100).rounded()))%").monospacedDigit()
-            }.font(.caption).foregroundStyle(.secondary)
+            }.font(.caption).foregroundStyle(Color.secondary)
         }.accessibilityElement(children: .combine).accessibilityLabel("整体进度").accessibilityValue("\(Int((progress.overall * 100).rounded()))%")
     }
 
@@ -107,7 +107,7 @@ struct SigningProgressSheet: View {
                     }
                 }
                 if let detail = progress.details[stage], state != .pending {
-                    Text(detail).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
+                    Text(detail).font(.caption.monospaced()).foregroundStyle(Color.secondary).lineLimit(2).truncationMode(.middle)
                 }
                 if state == .running, let fraction = progress.fraction {
                     ProgressView(value: fraction).tint(Palette.accent).animation(.easeOut(duration: 0.2), value: fraction)
@@ -119,10 +119,10 @@ struct SigningProgressSheet: View {
 
     @ViewBuilder private func stateIcon(_ state: SigningProgressModel.StepState, stage: SigningStage) -> some View {
         switch state {
-        case .pending: Image(systemName: stage.symbol).font(.system(size: 14)).foregroundStyle(.tertiary)
+        case .pending: Image(systemName: stage.symbol).font(.system(size: 14)).foregroundStyle(Palette.tertiaryText)
         case .running: ProgressView().controlSize(.small).tint(Palette.accent)
         case .done: Image(systemName: "checkmark.circle.fill").font(.system(size: 20)).foregroundStyle(.green)
-        case .skipped: Image(systemName: "minus.circle.fill").font(.system(size: 20)).foregroundStyle(.tertiary)
+        case .skipped: Image(systemName: "minus.circle.fill").font(.system(size: 20)).foregroundStyle(Palette.tertiaryText)
         case .failed: Image(systemName: "xmark.circle.fill").font(.system(size: 20)).foregroundStyle(.red)
         }
     }
@@ -131,7 +131,7 @@ struct SigningProgressSheet: View {
         VStack(spacing: 10) {
             switch progress.outcome {
             case .running:
-                Label("签名进行中，请保持 Retools 在前台", systemImage: "hourglass").font(.footnote).foregroundStyle(.secondary)
+                Label("签名进行中，请保持 Retools 在前台", systemImage: "hourglass").font(.footnote).foregroundStyle(Color.secondary)
             case .succeeded:
                 HStack(spacing: 10) {
                     if let url = progress.exportURL {

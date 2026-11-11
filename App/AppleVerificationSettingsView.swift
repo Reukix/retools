@@ -36,7 +36,7 @@ struct AppleVerificationSettingsView: View {
                 Section {
                     LabeledContent("来源", value: renewal.settings.anisetteURL)
                     Text(renewal.anisetteClientInfo).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
-                    Text(renewal.anisetteUserAgent).font(.system(.footnote, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text(renewal.anisetteUserAgent).font(.system(.footnote, design: .monospaced)).foregroundStyle(Color.secondary).textSelection(.enabled)
                 } header: { Text("服务器客户端信息") } footer: { Text("客户端信息与 User-Agent 成对从同一服务器读取，用于保持设备验证配置一致。") }
             }
             Section {
@@ -47,7 +47,7 @@ struct AppleVerificationSettingsView: View {
             }
             if renewal.isWorking { Section { HStack { ProgressView(); Text(renewal.status) } } }
         }
-        .scrollContentBackground(.hidden).ambientBackground().navigationTitle("验证服务与诊断").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .scrollContentBackground(.hidden).ambientBackground().navigationTitle("验证服务与诊断").navigationBarTitleDisplayMode(.inline)
         .disabled(renewal.isWorking)
         .onDisappear { renewal.save() }
         .confirmationDialog("重置验证数据？", isPresented: $showReset, titleVisibility: .visible) {
@@ -60,14 +60,14 @@ struct AuthDiagnosticView: View {
     @State private var entries = AuthDiagnostics.entries()
     var body: some View {
         List {
-            if entries.isEmpty { Text("尚无登录诊断记录").foregroundStyle(.secondary) }
+            if entries.isEmpty { Text("尚无登录诊断记录").foregroundStyle(Color.secondary) }
             ForEach(entries) { entry in
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack { Text(entry.stage).font(.headline); Spacer(); Text(entry.date, style: .time).font(.caption).foregroundStyle(.secondary) }
+                    HStack { Text(entry.stage).font(.headline); Spacer(); Text(entry.date, style: .time).font(.caption).foregroundStyle(Color.secondary) }
                     Text(entry.message).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 }.padding(.vertical, 5)
             }
-        }.scrollContentBackground(.hidden).ambientBackground().navigationTitle("诊断记录").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        }.scrollContentBackground(.hidden).ambientBackground().navigationTitle("诊断记录").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("刷新") { entries = AuthDiagnostics.entries() } }
     }
 }

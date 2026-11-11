@@ -6,7 +6,6 @@ struct SettingsView: View {
     @EnvironmentObject private var store: WorkspaceStore
     @EnvironmentObject private var renewal: RenewalController
     @State private var showNotices = false
-    @ObservedObject private var deviceTools = DeviceToolsStore.shared
     @AppStorage("RetoolsAIEnabled") private var aiEnabled = false
     var body: some View {
         NavigationStack {
@@ -16,7 +15,7 @@ struct SettingsView: View {
                         BrandMark(size: 64)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Retools").font(.title2.weight(.bold))
-                            Text("签名 · 容器 · 续签工作台").font(.subheadline).foregroundStyle(.secondary)
+                            Text("签名 · 容器 · 续签工作台").font(.subheadline).foregroundStyle(Color.secondary)
                             HStack(spacing: 6) {
                                 StatusPill(title: "v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")")
                             }.padding(.top, 2)
@@ -43,9 +42,6 @@ struct SettingsView: View {
                             connectionValue
                         }
                     }.accessibilityIdentifier("settings.deviceConnection")
-                    NavigationLink { DeviceToolsView() } label: {
-                        row("设备工具", symbol: "wrench.and.screwdriver") { value(deviceTools.cleanupCandidates.isEmpty ? "" : "可清理 \(deviceTools.cleanupCandidates.count)") }
-                    }.accessibilityIdentifier("settings.deviceTools")
                     NavigationLink { DevelopmentSigningView() } label: {
                         row("Apple ID 开发签名", symbol: "person.crop.circle.badge.checkmark") {
                             value(RTNative.hostAllowsDebugging() ? "已启用" : "未配置", highlight: RTNative.hostAllowsDebugging())
@@ -53,9 +49,9 @@ struct SettingsView: View {
                     }.accessibilityIdentifier("settings.developmentSigning")
                 } header: { Text("账号与设备") }
                 Section {
-                    NavigationLink { PluginManagerView() } label: {
-                        row("插件管理", symbol: "puzzlepiece.extension") { value(store.state.plugins.isEmpty ? "" : "\(store.state.plugins.count)") }
-                    }.accessibilityIdentifier("settings.plugins")
+                    NavigationLink { DecryptionCacheView() } label: {
+                        row("缓存清理", symbol: "trash") { EmptyView() }
+                    }.accessibilityIdentifier("settings.cache")
                     NavigationLink { ContainerRuntimeSettingsView() } label: {
                         row("容器运行", symbol: "shippingbox") { value(store.containerMode.title) }
                     }.accessibilityIdentifier("settings.runtime")
@@ -96,14 +92,13 @@ struct SettingsView: View {
             .navigationDestination(isPresented: $store.showDevelopmentSigning) { DevelopmentSigningView() }
             .navigationDestination(isPresented: $store.showDeviceConnection) { DeviceConnectionView() }
             .sheet(isPresented: $showNotices) { NoticesView() }
-            .onAppear { store.refreshStorage() }
             .task { await renewal.verifyConnectionIfNeeded() }
         }
     }
     private func row<Trailing: View>(_ title: String, symbol: String, @ViewBuilder trailing: () -> Trailing) -> some View {
         HStack(spacing: 12) {
             Image(systemName: symbol).font(.system(size: 18)).foregroundStyle(Palette.accent).frame(width: 28).accessibilityHidden(true)
-            Text(title)
+            Text(title).foregroundStyle(Color.primary)
             Spacer(minLength: 8)
             trailing()
         }.padding(.vertical, 3)
@@ -126,11 +121,11 @@ struct ShortcutsSettingsView: View {
         Form {
             Section {
                 Label("续签全部应用", systemImage: "arrow.triangle.2.circlepath")
-                Text("在后台运行，不会打开 Retools；锁屏时也能执行。各应用使用自己绑定的账号与团队。").font(.footnote).foregroundStyle(.secondary)
+                Text("在后台运行，不会打开 Retools；锁屏时也能执行。各应用使用自己绑定的账号与团队。").font(.footnote).foregroundStyle(Color.secondary)
             }
             Section {
                 Label("安装 IPA", systemImage: "square.and.arrow.down")
-                Text("传入 IPA 文件，选择签名账号后签名并安装。会打开 Retools。").font(.footnote).foregroundStyle(.secondary)
+                Text("传入 IPA 文件，选择签名账号后签名并安装。会打开 Retools。").font(.footnote).foregroundStyle(Color.secondary)
             }
             Section {
                 HelpStep(number: "1", title: "新建个人自动化", detail: "快捷指令 → 自动化 → 新建 → 特定时间，例如每天 0:00。")
@@ -151,7 +146,7 @@ struct ShortcutsSettingsView: View {
             }
         }
         .scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle("快捷指令").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .navigationTitle("快捷指令").navigationBarTitleDisplayMode(.inline)
         .task {
             let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
             notificationsAllowed = [.authorized, .provisional, .ephemeral].contains(status)
@@ -170,7 +165,7 @@ struct NoticesView: View {
         NavigationStack {
             ScrollView {
                 Text(text).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).padding(22).frame(maxWidth: .infinity, alignment: .leading)
-            }.navigationTitle("开源许可").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            }.navigationTitle("开源许可").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         }
     }

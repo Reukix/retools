@@ -115,6 +115,11 @@ actor LocalDeviceLink {
         try await gateway.installAppBundle(bundleId: bundleID, appName: app.lastPathComponent)
         AuthDiagnostics.record(stage: "续签安装", message: "系统安装已完成")
     }
+    func installStoreArchive(_ file: URL, bundleID: String, replacing: Bool,
+                             progress: @escaping @Sendable (StoreArchiveInstallProgress) -> Void = { _ in }) async throws {
+        try Task.checkCancellation()
+        try await gateway.installStoreArchive(file: file, bundleId: bundleID, replacing: replacing, progress: progress)
+    }
     /// 只安装描述文件（misagent），不动应用本身；装完从设备读回描述文件列表核对。
     func installProfiles(_ profiles: [(uuid: String, data: Data)]) async throws {
         try Task.checkCancellation()
@@ -130,7 +135,7 @@ actor LocalDeviceLink {
         guard gateway.pairingFileType == .rppairing else { throw WorkspaceFailure("回环 JIT 需要 Remote Pairing 配对记录。") }
         if try await gateway.isDDIMounted() { return }
         guard DeveloperDiskImage.autoMountEnabled else {
-            throw WorkspaceFailure("设备开发者镜像尚未挂载。请先在「设置 → 设备工具」里挂载开发者镜像，再使用 JIT 模式。")
+            throw WorkspaceFailure("设备开发者镜像尚未挂载。请先在「工具 → 开发者镜像」里挂载开发者镜像，再使用 JIT 模式。")
         }
         try await mountDeveloperImageIfNeeded(progress: progress ?? { _ in })
     }

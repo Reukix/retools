@@ -4,12 +4,32 @@ import subprocess
 import sys
 from pathlib import Path
 import plistlib
+import hashlib
+import json
 
 app = Path(sys.argv[1]).resolve()
 info = plistlib.loads((app / "Info.plist").read_bytes())
+assert (app / "Frameworks/TweakLoader.dylib").is_file(), "Container TweakLoader is missing"
+if info.get("DTPlatformName") == "iphoneos":
+    assert (app / "Frameworks/CydiaSubstrate.framework/CydiaSubstrate").is_file(), "Substrate-compatible runtime is missing"
+store_module = app / "Frameworks/IPadnKit.framework"
+assert store_module.is_dir(), "Store browser module is missing"
+runtime = store_module / "SAPRuntime"
+manifest = json.loads((runtime / "manifest.json").read_text())
+for name, expected in manifest["files"].items():
+    assert Path(name).name == name
+    assert hashlib.sha256((runtime / name).read_bytes()).hexdigest() == expected, "Store runtime mismatch: " + name
+assert (store_module / "IPadnLicense.txt").is_file(), "Store browser license is missing"
+assert not any("gestalt" in path.name.lower() for path in app.rglob("*")), "Removed GestaltX files remain in the bundle"
+document_types = {value for item in info.get("CFBundleDocumentTypes", []) for value in item.get("LSItemContentTypes", [])}
+assert {"com.apple.itunes.ipa", "public.zip-archive"} <= document_types, "IPA document import registration is missing"
+assert not {"com.apple.property-list", "public.xml"} & document_types, "Removed document handlers remain registered"
+assert all("gestaltx" not in item.get("CFBundleURLSchemes", []) for item in info.get("CFBundleURLTypes", [])), "Removed URL scheme remains registered"
 executables = [app / info["CFBundleExecutable"]]
+executables += list((app / "Frameworks").glob("*.dylib"))
 for extension in (app / "PlugIns").glob("*.appex"):
     metadata = plistlib.loads((extension / "Info.plist").read_bytes())
+    assert metadata.get("NSExtension", {}).get("NSExtensionPointIdentifier") != "com.apple.share-services", "A removed share extension is still embedded"
     assert metadata["CFBundleIdentifier"].startswith(info["CFBundleIdentifier"] + "."), "Extension identifier must be nested under the host"
     executables.append(extension / metadata["CFBundleExecutable"])
 for framework in (app / "Frameworks").glob("*.framework"):

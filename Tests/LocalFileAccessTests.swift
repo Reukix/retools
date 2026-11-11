@@ -22,13 +22,83 @@ final class LocalFileAccessTests: XCTestCase {
             XCTAssertNoThrow(try LocalFileTarget(prefix + "11111111-1111-4111-8111-111111111111"))
         }
     }
-    func testTargetRejectsParentsTraversalInvalidUUIDAndSystemDirectories() {
+    func testTargetRejectsParentsTraversalInvalidUUIDAndUnrelatedDirectories() {
         for path in ["/", "/var/mobile/Containers/Data/Application/", containerPath + "/../elsewhere", containerPath + "/./Documents",
-                     containerPath + "//Documents", containerPath + "/a\0b", "/var/containers/Data/System", "/var/mobile/Containers/Data/InternalDaemon/11111111-1111-4111-8111-111111111111",
+                     containerPath + "//Documents", containerPath + "/a\0b", "/var/containers/Data/SystemOther", "/var/mobile/Containers/Data/InternalDaemon/not-a-uuid",
                      containerPath + "-extra", "/var/mobile/Containers/Data/Application/not-a-uuid"] {
             XCTAssertThrowsError(try LocalFileTarget(path), path)
         }
     }
+    func testWQContainerCategoriesStayInsideTheirDocumentedRoots() throws {
+        let daemon = try LocalFileTarget("/var/mobile/Containers/Data/InternalDaemon/11111111-1111-4111-8111-111111111111/Library")
+        XCTAssertEqual(LocalFileArea.of(daemon), .daemon)
+        let system = try LocalFileTarget("/var/containers/Data/System/Library")
+        XCTAssertEqual(system.root.path, "/private/var/containers/Data/System")
+        XCTAssertEqual(system.components, ["Library"])
+        let group = try LocalFileTarget("/var/containers/Shared/SystemGroup/systemgroup.com.apple.osanalytics/Library/Logs")
+        XCTAssertEqual(LocalFileArea.of(group), .systemGroup)
+        XCTAssertEqual(group.components, ["Library", "Logs"])
+        for path in ["/var/containers/Shared/SystemGroup/not-a-group", "/var/containers/Shared/SystemGroup/systemgroup.",
+                     "/var/containers/Data/System/../Shared", "/var/containers/Shared/SystemGroup/systemgroup.com.apple.test/../elsewhere"] {
+            XCTAssertThrowsError(try LocalFileTarget(path), path)
+        }
+    }
+
+    func testAppGroupParentSupportsAliasesAndKeepsUUIDAccessSeparate() throws {
+        let parent = try LocalFileTarget("/var/mobile/Containers/Shared/AppGroup/")
+        XCTAssertEqual(parent.root.path, "/private/var/mobile/Containers/Shared/AppGroup")
+        XCTAssertTrue(parent.components.isEmpty)
+        XCTAssertEqual(try LocalFileTarget(parent.root.path), parent)
+        XCTAssertEqual(LocalFileArea.of(parent), .appGroup)
+
+        let child = try LocalFileTarget(parent.path + "/11111111-1111-4111-8111-111111111111/Library")
+        XCTAssertEqual(child.root.path, parent.path + "/11111111-1111-4111-8111-111111111111")
+        XCTAssertEqual(child.components, ["Library"])
+        let metadata = try LocalFileTarget(parent.path + "/.metadata")
+        XCTAssertEqual(metadata.root, parent.root)
+        XCTAssertEqual(metadata.components, [".metadata"])
+        for path in [parent.path + "/../elsewhere", parent.path + "/./Library", parent.path + "//Library",
+                     parent.path + "Other", "/var/mobile/Containers/Shared"] {
+            XCTAssertThrowsError(try LocalFileTarget(path), path)
+        }
+    }
+
+    func testAppGroupParentListingAndChildReadReleaseTheirOwnGrants() async throws {
+        let uuid = "11111111-1111-4111-8111-111111111111"
+        let physical = try XCTUnwrap(container)
+        try FileManager.default.createDirectory(at: physical.appendingPathComponent(uuid), withIntermediateDirectories: true)
+        let contents = Data("group data".utf8)
+        try contents.write(to: physical.appendingPathComponent(uuid + "/data.txt"))
+        try Data("metadata".utf8).write(to: physical.appendingPathComponent(".metadata"))
+        let backend = RecordingLocalAccess()
+        let service = LocalFileAccessService(backend: backend, rootForTarget: {
+            $0.root.path == LocalFileTarget.appGroupParent ? physical : physical.appendingPathComponent(uuid)
+        })
+        let parent = "/var/mobile/Containers/Shared/AppGroup"
+        let entries = try await service.entries(path: parent, group: "test-group")
+        XCTAssertEqual(Set(entries.map(\.name)), Set([uuid, ".metadata"]))
+        let data = try await service.read(path: parent + "/" + uuid + "/data.txt", group: "test-group")
+        XCTAssertEqual(data, contents)
+        let metadata = try await service.read(path: parent + "/.metadata", group: "test-group")
+        XCTAssertEqual(metadata, Data("metadata".utf8))
+        XCTAssertEqual(backend.acquiredRoots, ["/private" + parent, "/private" + parent + "/" + uuid, "/private" + parent])
+        XCTAssertEqual(backend.events, ["acquire", "release:42", "acquire", "release:42", "acquire", "release:42"])
+    }
+
+    @MainActor
+    func testLocalCatalogNormalizesDeduplicatesAndKeepsKnownNames() throws {
+        let catalog = LocalFileCatalog(cache: root.appendingPathComponent("catalog.json"))
+        let named = try XCTUnwrap(LocalFileContainer.parse(["path": containerPath, "name": "示例应用", "identifier": "example.app"]))
+        let alias = try XCTUnwrap(LocalFileContainer.parse(["path": String(containerPath.dropFirst(8))]))
+        catalog.merge([named, alias])
+        XCTAssertEqual(catalog.containers.count, 1)
+        XCTAssertEqual(catalog.containers.first?.title, "示例应用")
+        XCTAssertNil(LocalFileContainer.parse(["path": containerPath + "/Documents"]))
+        XCTAssertNil(LocalFileContainer.parse(["path": "/var/containers/Bundle/Application/unsafe.app"]))
+        let restored = LocalFileCatalog(cache: root.appendingPathComponent("catalog.json"))
+        XCTAssertEqual(restored.containers, catalog.containers)
+    }
+
     func testReaderListsHiddenFilesAndRejectsSymlinkTraversal() throws {
         let folder = container.appendingPathComponent("Documents")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -129,13 +199,15 @@ final class LocalFileAccessTests: XCTestCase {
 private final class RecordingLocalAccess: LocalFileAccessBackend, @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: [String] = []
+    private var roots: [String] = []
     private let fail: Bool
     private let cancel: Bool
     private let releaseSucceeds: Bool
     var events: [String] { lock.withLock { recorded } }
+    var acquiredRoots: [String] { lock.withLock { roots } }
     init(fail: Bool = false, cancel: Bool = false, releaseSucceeds: Bool = true) { self.fail = fail; self.cancel = cancel; self.releaseSucceeds = releaseSucceeds }
     func acquire(root: String, group: String) throws -> Int64 {
-        lock.withLock { recorded.append("acquire") }
+        lock.withLock { recorded.append("acquire"); roots.append(root) }
         if fail { throw WorkspaceFailure("Synthetic permission denial") }
         if cancel { withUnsafeCurrentTask { $0?.cancel() } }
         return 42

@@ -8,13 +8,12 @@ final class DeviceFileAccessTests: XCTestCase {
         plist.merge(extra) { _, new in new }
         return try XCTUnwrap(DeviceInstalledApp.parse(PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)))
     }
-    func testSwitchExtendsExistingFileEntryWithoutChangingDeviceAccess() throws {
-        let storeApp = try app()
-        XCTAssertFalse(DeviceFileAccess.canBrowse(storeApp, locally: false))
-        XCTAssertTrue(DeviceFileAccess.canBrowse(storeApp, locally: true))
-        XCTAssertFalse(storeApp.filesAccessible)
-        let development = try app(["Entitlements": ["get-task-allow": true]])
-        XCTAssertTrue(DeviceFileAccess.canBrowse(development, locally: false))
+    func testManualLocalDirectoryUsesValidatedRootAndPreservesNestedPath() throws {
+        let input = try LocalFileTarget(container + "/Documents/Saves")
+        let app = DeviceFileAccess.localApp(for: input)
+        let target = try DeviceFileAccess.target(for: app, path: "/" + input.components.joined(separator: "/"))
+        XCTAssertEqual(target, input)
+        XCTAssertFalse(app.filesAccessible, "本机入口不应伪造配对服务的文件权限")
     }
     func testRelativeBrowserPathsStayInsideSelectedAppContainer() throws {
         let app = try app()
@@ -33,12 +32,25 @@ final class DeviceFileAccessTests: XCTestCase {
     func testSharedDataUsesItsOwnContainerAndFiltersInvalidRoots() throws {
         let group = "/var/mobile/Containers/Shared/AppGroup/22222222-2222-4222-8222-222222222222"
         let app = try app(["GroupContainers": ["group.example": group, "group.alias": "/private" + group,
-                                               "group.invalid": "/var/containers/Data/System", "group.nested": group + "/Library"]])
+                                               "group.invalid": "/var/containers/Data/System", "group.nested": group + "/Library",
+                                               "group.parent": "/var/mobile/Containers/Shared/AppGroup"]])
         let roots = DeviceFileAccess.sharedRoots(for: app)
         XCTAssertEqual(roots.count, 1)
         let target = try DeviceFileAccess.target(for: app, path: "/data.json", root: roots.first)
         XCTAssertEqual(target.root.path, "/private" + group)
         XCTAssertEqual(target.components, ["data.json"])
+    }
+    func testAppGroupParentBrowserCanOpenAChildContainerAndParentMetadata() throws {
+        let parent = try LocalFileTarget("/var/mobile/Containers/Shared/AppGroup")
+        let app = DeviceFileAccess.localApp(for: parent)
+        XCTAssertEqual(try DeviceFileAccess.target(for: app, path: "/"), parent)
+        let child = try DeviceFileAccess.target(for: app, path: "/22222222-2222-4222-8222-222222222222/Documents")
+        XCTAssertEqual(child.root.path, parent.path + "/22222222-2222-4222-8222-222222222222")
+        XCTAssertEqual(child.components, ["Documents"])
+        let metadata = try DeviceFileAccess.target(for: app, path: "/.metadata")
+        XCTAssertEqual(metadata.root, parent.root)
+        XCTAssertEqual(metadata.components, [".metadata"])
+        XCTAssertThrowsError(try DeviceFileAccess.target(for: app, path: "/../elsewhere"))
     }
     func testLocalRowsReuseBrowserPathsSizeAndModificationDate() {
         let date = Date(timeIntervalSince1970: 1_700_000_000)

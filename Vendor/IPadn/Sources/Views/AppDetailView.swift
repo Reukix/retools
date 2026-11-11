@@ -1,0 +1,1034 @@
+import SwiftUI
+import UIKit
+
+struct AppDetailView: View {
+    @EnvironmentObject private var store: ToolStore
+    @EnvironmentObject private var apple: AppleService
+    @Environment(\.dismiss) private var dismiss
+    let app: StoreApp
+    /// Start the primary download as soon as the page opens (search "获取").
+    var autoStart = false
+    @State private var autoStarted = false
+    @State private var versions: [AppVersion] = []
+    @State private var versionsLoading = false
+    @State private var downloadLoading = false
+    @State private var preparingVersionID: String?
+    @State private var downloadTask: Task<Void, Never>?
+    @State private var manualID = ""
+    @State private var versionSearch = ""
+    @State private var versionError: String?
+    /// Apple's full list, on unless turned off; remembered across apps.
+    @AppStorage("storage_officialVersions") private var official = true
+    /// Shown above a public list when Apple's could not be used.
+    @State private var versionNote: String?
+    /// Version number and date per version ID, read from Apple as rows appear.
+    @State private var metadata: [String: VersionMetadata] = [:]
+    @State private var metadataLoading = Set<String>()
+    @State private var metadataFailures = 0
+    @State private var metadataStopped = false
+    /// Long histories start with the newest ten versions.
+    @State private var showAllVersions = false
+    /// Release notes by version number, from the App Store page's version history.
+    @State private var releaseNotes: [String: ReleaseNote] = [:]
+    @State private var expandedNotes = Set<String>()
+    /// The rows on screen belong to the previous region, platform or source
+    /// and are replaced as soon as the new list arrives.
+    @State private var versionsStale = false
+    @State private var showsMacSpinner = false
+    /// The latest version-list load; an earlier, cancelled one must not end
+    /// its loading state.
+    @State private var versionsLoadID = UUID()
+    @State private var showLogin = false
+    @State private var reauthenticationID: String?
+    @State private var retryAfterLoginVersion: String?
+    @State private var showVerification = false
+    @State private var pendingDownloadVersion: String?
+    @State private var retryVersionsAfterVerification = false
+    @State private var verifiedForRetry = false
+    @State private var showDescription = false
+    @State private var reloadID = 0
+    @State private var loadedVersionsKey: String?
+    @State private var loadedReloadID = 0
+    private var versionsKey: String {
+        "\(usesApple)-\(reloadID)-\(store.settings.store.country)-\(store.settings.store.platform.rawValue)-\(apple.activeID ?? "")"
+    }
+    @State private var macWebsite: URL?
+    @State private var macInstallers: [MacInstallerService.Installer] = []
+    @State private var macLoading = false
+    @State private var macOfficialLoading = false
+    @State private var macOfficialTask: Task<Void, Never>?
+    @State private var enteringMacDownloadURL = false
+    @State private var macDownloadURL = ""
+    @State private var headerAway = false
+    @State private var extras: StoreService.ListingExtras?
+    /// Until the store listing arrives, the preview keeps its place with
+    /// placeholders so the page below doesn't jump.
+    @State private var extrasLoaded = LocalResources.isPreview
+    @State private var viewing: StoreService.Screenshot?
+    @Namespace private var screenshotZoom
+    @State private var developerApps: [StoreApp] = []
+    /// Listing artwork, else what a download of this app brought along
+    /// (delisted apps have no public listing to show).
+    private var iconURL: URL? { app.iconURL ?? store.localArtwork(app.id) }
+    private var storeURL: URL { URL(string: "https://apps.apple.com/\(store.settings.store.country.lowercased())/app/id\(app.id)")! }
+    private var filtered: [AppVersion] {
+        versionSearch.isEmpty ? versions : versions.filter {
+            displayVersion($0).localizedCaseInsensitiveContains(versionSearch) || $0.id.contains(versionSearch)
+        }
+    }
+    private func displayVersion(_ version: AppVersion) -> String { metadata[version.id]?.version ?? version.version }
+    /// Lists from Apple carry only version IDs; each row then reads its own
+    /// number and date. Other lists use what is already known.
+    /// Apple's list needs a signed-in account; otherwise the public list is shown.
+    private var usesApple: Bool { official && apple.active != nil }
+    private var readsMetadata: Bool { usesApple && versionNote == nil && !metadataStopped }
+    var body: some View {
+        List {
+                CardSection {
+                    header.onScrolledUnderBar { headerAway = $0 }
+                        .cardRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20))
+                    infoStrip.cardRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 10, trailing: 0))
+                }
+                if let shots = extrasLoaded ? extras?.screenshots : [], !extrasLoaded || !shots.isEmpty {
+                    CardSection(plain: true) {
+                        ScreenshotStrip(screenshots: shots, platform: store.settings.store.platform,
+                                        zoom: screenshotZoom) { viewing = $0 }
+                    } header: { sectionTitle("预览") }
+                }
+                versionSection
+                if store.settings.store.platform == .macOS { macSection }
+                if !app.description.isEmpty {
+                    CardSection {
+                        Text(app.description).font(.subheadline).lineLimit(showDescription ? nil : 4).textSelection(.enabled)
+                        if !showDescription {
+                            Button("更多") { withAnimation { showDescription = true } }.font(.subheadline)
+                        }
+                    } header: { sectionTitle("简介") }
+                }
+                if !app.isDelisted {
+                    CardSection {
+                        if store.isFavorite(app) { PriceHistorySection(app: app) }
+                        else {
+                            Text("关注后会记录价格变化，降价或限免时提醒你。").font(.subheadline).foregroundStyle(Color.secondary)
+                        }
+                        StoreNavigationLink { RegionPriceView(app: app) } label: {
+                            HStack {
+                                Label("多地区价格对比", systemImage: "globe")
+                                Spacer()
+                                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Color(uiColor: .tertiaryLabel))
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("detail.regionPrices")
+                    } header: { sectionTitle("价格") }
+                }
+                CardSection {
+                    if app.isDelisted { LabeledContent("商店状态", value: "已下架") }
+                    if !app.displayCategory.isEmpty { LabeledContent("类别", value: app.displayCategory) }
+                    if app.size > 0 { LabeledContent("大小", value: app.size.byteLabel) }
+                    if !app.minimumOS.isEmpty {
+                        LabeledContent("兼容性", value: "\(store.settings.store.platform.title) \(app.minimumOS) 或更高版本")
+                    }
+                    if !app.price.isEmpty { LabeledContent("价格", value: app.price) }
+                    LabeledContent("商店地区", value: store.settings.store.country)
+                    if !app.bundleID.isEmpty {
+                        LabeledContent("Bundle ID") {
+                            Text(app.bundleID).font(.footnote.monospaced()).textSelection(.enabled).multilineTextAlignment(.trailing)
+                        }
+                    }
+                    if let developer = extras?.developer, !developer.isEmpty { LabeledContent("开发者", value: developer) }
+                    if store.settings.store.platform != .macOS {
+                        Link(destination: storeURL) { Label("在 App Store 中查看", systemImage: "arrow.up.right.square") }
+                    }
+                } header: { sectionTitle("信息") }
+                if !developerApps.isEmpty {
+                    CardSection {
+                        DeveloperAppsStrip(apps: developerApps)
+                            .cardRowInsets(EdgeInsets())
+                    } header: { sectionTitle(extras?.developer.isEmpty == false ? "更多来自 \(extras!.developer)" : "同一开发者的其他应用") }
+                }
+        }
+        .toolPage()
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // App Store shows the small icon in the bar once the header is gone.
+            ToolbarItem(placement: .principal) {
+                AppIcon(url: iconURL, name: app.name, size: 30)
+                    .opacity(headerAway ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.18), value: headerAway)
+                    .accessibilityHidden(true)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    let following = !store.isFavorite(app)
+                    store.toggleFavorite(app); UX.feedback()
+                    if following { store.infoMessage = "已关注，有新版本、降价或下架时会提醒你" }
+                } label: {
+                    Image(systemName: store.isFavorite(app) ? "bell.fill" : "bell")
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .accessibilityLabel(store.isFavorite(app) ? "取消关注" : "关注应用")
+            }
+        }
+        .alert("下载 Mac 安装包", isPresented: $enteringMacDownloadURL) {
+            TextField("https://example.com/App.dmg", text: $macDownloadURL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("加入下载") {
+                let value = macDownloadURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let url = URL(string: value), MacInstallerService.directPackage(url) else {
+                    store.errorMessage = "请输入有效的 HTTPS 下载链接，文件需要是 DMG、PKG 或 ZIP。"
+                    return
+                }
+                enqueueMacInstaller(MacInstallerService.Installer(url: url))
+                macDownloadURL = ""
+            }
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text("输入 DMG、PKG 或 ZIP 安装包的下载链接。")
+        }
+        .storeNavigationDestination(isPresented: $showLogin) {
+            LoginView(initialAccountID: reauthenticationID, onSignedIn: {
+                reauthenticationID = nil
+                guard let pending = retryAfterLoginVersion else { return }
+                retryAfterLoginVersion = nil
+                Task { @MainActor in
+                    await Task.yield()
+                    download(versionID: pending.isEmpty ? nil : pending)
+                }
+            })
+        }
+        .storeSheet(isPresented: $showVerification, onDismiss: {
+            guard verifiedForRetry else {
+                pendingDownloadVersion = nil
+                retryVersionsAfterVerification = false
+                return
+            }
+            verifiedForRetry = false
+            if retryVersionsAfterVerification {
+                retryVersionsAfterVerification = false
+                reloadID += 1
+            } else {
+                let pending = pendingDownloadVersion
+                pendingDownloadVersion = nil
+                if let pending { download(versionID: pending.isEmpty ? nil : pending) }
+            }
+        }) {
+            if let accountID = apple.activeID {
+                ExistingAccountVerificationView(accountID: accountID, onVerified: {
+                    verifiedForRetry = true
+                })
+                .environmentObject(store)
+                .environmentObject(apple)
+            }
+        }
+        .onDisappear { downloadTask?.cancel(); macOfficialTask?.cancel() }
+        .task {
+            // Getting the app needs the signing runtime; load it while the page is read.
+            if apple.active != nil, store.settings.useSignerCache { store.signer.prewarm() }
+            guard autoStart, !autoStarted else { return }
+            autoStarted = true
+            if apple.active == nil { showLogin = true }
+            else if store.settings.store.platform.supportsIPA { download(versionID: app.externalVersionID) }
+            else { downloadAppleMacPKG() }
+        }
+        .task(id: versionsKey) {
+            // Coming back to the page (e.g. from the Downloads tab) keeps the
+            // loaded list; only a new key or 刷新 fetches again.
+            guard versionsKey != loadedVersionsKey else { return }
+            let forced = reloadID != loadedReloadID
+            // A different region, platform or account lists different versions.
+            // The old rows stay (dimmed) until the new list replaces them, so the
+            // page doesn't collapse and grow again.
+            if !forced { versionsStale = !versions.isEmpty }
+            let loaded = await fetchVersions(force: forced)
+            if loaded { loadedVersionsKey = versionsKey; loadedReloadID = reloadID }
+            else if versionsStale, !Task.isCancelled { versions = [] }
+            if !Task.isCancelled { versionsStale = false }
+        }
+        .task(id: "\(app.id)-\(store.settings.store.platform.rawValue)-\(store.settings.store.country)") {
+            await loadMacInstallers()
+        }
+        .task(id: "notes-\(app.id)-\(store.settings.store.country)") {
+            guard !LocalResources.isPreview, !app.isDelisted else { return }
+            // The search region's page, else the account's.
+            var countries = [store.settings.store.country.uppercased()]
+            if !countries.contains(store.watchCountry) { countries.append(store.watchCountry) }
+            let notes = await ReleaseNotesService.notes(appID: app.id, countries: countries)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { releaseNotes = notes }
+        }
+        .task(id: "extras-\(app.id)-\(store.settings.store.platform.rawValue)-\(store.settings.store.country)") {
+            // Demo data stays offline.
+            guard !LocalResources.isPreview else { return }
+            let found = try? await StoreService.listingExtras(id: app.id, country: store.settings.store.country,
+                                                            platform: store.settings.store.platform)
+            guard !Task.isCancelled else { return }
+            extras = found; extrasLoaded = true
+            guard let developerID = found?.developerID else { developerApps = []; return }
+            let apps = (try? await StoreService.developerApps(developerID, excluding: app.id, country: store.settings.store.country,
+                                                             platform: store.settings.store.platform)) ?? []
+            guard !Task.isCancelled else { return }
+            developerApps = apps
+        }
+        .fullScreenCover(item: $viewing) { shot in
+            ScreenshotViewer(screenshots: extras?.screenshots ?? [shot], selection: shot)
+                .zoomTransition(shot.id, in: screenshotZoom)
+        }
+    }
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text).font(.title3.weight(.bold)).foregroundStyle(Color.primary).textCase(nil)
+    }
+
+    /// App Store product header: big icon, name, subtitle and the primary capsule.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 14) {
+                AppIcon(url: iconURL, name: app.name, size: 80)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(app.name.isEmpty ? app.bundleID : app.name)
+                        .font(.system(.title2, design: .rounded).weight(.bold)).foregroundStyle(Color.primary)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    if app.isDelisted { TagBadge(text: "已下架", tint: .orange) }
+                    else if !app.displayCategory.isEmpty { Text(app.displayCategory).font(.subheadline).foregroundStyle(Color.secondary) }
+                    Text(app.version.isEmpty ? "版本待查询" : "v\(app.version)")
+                        .font(.caption.monospacedDigit()).foregroundStyle(Color.secondary).accessibilityIdentifier("app.version")
+                    Button { copy(app.id) } label: {
+                        Label("App ID \(app.id)", systemImage: "doc.on.doc")
+                            .font(.caption).foregroundStyle(Color.secondary).lineLimit(1)
+                    }.buttonStyle(.plain).accessibilityIdentifier("app.copy-id")
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: 14) {
+                primaryButton
+                Spacer(minLength: 0)
+                ShareLink(item: storeURL) { Label("分享", systemImage: "square.and.arrow.up").font(.subheadline) }
+                    .buttonStyle(.plain).foregroundStyle(Color.primary).accessibilityLabel("分享商店链接")
+            }
+            if let account = apple.active {
+                Text("下载账号：" + account.id).font(.caption).foregroundStyle(Color.secondary).lineLimit(1)
+            }
+        }
+    }
+    @ViewBuilder private var primaryButton: some View {
+        let busy = downloadLoading || macOfficialLoading
+        if busy {
+            HStack(spacing: 10) {
+                Button {
+                    downloadTask?.cancel(); macOfficialTask?.cancel()
+                } label: { ProgressRing(progress: nil) }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("取消准备下载")
+                Text("正在准备…").font(.caption).foregroundStyle(Color.secondary)
+            }
+        } else if apple.active == nil {
+            RowCapsule(title: "登录", filled: true) { showLogin = true }
+        } else if store.settings.store.platform.supportsIPA {
+            RowCapsule(title: app.price.isEmpty || app.price == "免费" ? "获取" : "下载", filled: true) {
+                download(versionID: app.externalVersionID)
+            }
+            .accessibilityIdentifier("detail.get")
+        } else {
+            RowCapsule(title: "获取 PKG", filled: true) { downloadAppleMacPKG() }
+                .accessibilityIdentifier("mac.official-pkg")
+        }
+    }
+
+    /// Info strip under the header. At most four equal cells so it always
+    /// fits on one line; everything else is in the 信息 section below.
+    private var infoStrip: some View {
+        let items = Array(stripItems.prefix(4))
+        return HStack(spacing: 0) {
+            ForEach(items.indices, id: \.self) { index in
+                items[index]
+                if index < items.count - 1 { Divider().frame(height: 40) }
+            }
+        }
+        .padding(.horizontal, 8)
+    }
+
+    private var stripItems: [InfoStripItem] {
+        let platform = store.settings.store.platform
+        var items: [InfoStripItem] = []
+        if app.rating > 0 {
+            items.append(InfoStripItem(caption: "评分", value: String(format: "%.1f", app.rating),
+                                       detail: String(repeating: "★", count: max(0, min(5, Int(app.rating.rounded()))))))
+        }
+        if app.size > 0 {
+            let parts = app.size.byteLabel.components(separatedBy: " ")
+            items.append(InfoStripItem(caption: "大小", value: parts.first ?? app.size.byteLabel, detail: parts.count > 1 ? parts.last : nil))
+        }
+        if !app.minimumOS.isEmpty {
+            items.append(InfoStripItem(caption: "兼容性", value: app.minimumOS + "+", detail: platform.title))
+        } else {
+            items.append(InfoStripItem(caption: "平台", value: platform.title, symbol: platform.symbol))
+        }
+        if app.isDelisted {
+            items.append(InfoStripItem(caption: "状态", value: "已下架", symbol: "archivebox"))
+        } else if !app.displayCategory.isEmpty {
+            items.append(InfoStripItem(caption: "类别", value: app.displayCategory, symbol: "square.grid.2x2"))
+        }
+        items.append(InfoStripItem(caption: "地区", value: store.settings.store.country, detail: "商店"))
+        return items
+    }
+
+    @ViewBuilder private var versionSection: some View {
+        CardSection {
+            HStack(alignment: .center, spacing: 12) {
+                Text("Apple 完整版本列表").font(.subheadline).foregroundStyle(Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("detail.versions.official.label")
+                Toggle("Apple 完整版本列表", isOn: $official).labelsHidden()
+                    .toggleStyle(.switch).tint(UX.switchTint)
+                    .frame(width: 76, height: 44)
+                    .disabled(apple.active == nil)
+                    .accessibilityIdentifier("detail.versions.official")
+            }
+            .frame(minHeight: 44)
+            if apple.active == nil {
+                Button("登录商店账号以查看完整版本") { showLogin = true }
+                    .font(.footnote).foregroundStyle(Color.primary)
+            }
+            if downloadLoading {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("正在准备所选版本…").font(.subheadline).foregroundStyle(Color.secondary)
+                        Spacer()
+                        Button("取消") { downloadTask?.cancel() }.font(.subheadline)
+                    }
+                    ProgressView().progressViewStyle(.linear).tint(UX.accent)
+                }.accessibilityIdentifier("detail.download.preparing")
+            }
+            if let versionError { InlineIssue(message: versionError) { reloadID += 1 } }
+            if let versionNote {
+                Label(versionNote, systemImage: "info.circle").font(.footnote).foregroundStyle(Color.secondary)
+            }
+            if versions.count > 6 {
+                SearchInput(text: $versionSearch, placeholder: "筛选版本号或版本 ID")
+            }
+            let matches = filtered
+            // A search shows every match; otherwise ten until expanded.
+            let limit = showAllVersions || !versionSearch.isEmpty ? matches.count : 10
+            if versions.isEmpty && versionsLoading {
+                // Placeholders where the rows will be, instead of a spinner row
+                // that appears and disappears.
+                ForEach(0..<3, id: \.self) { _ in VersionRowSkeleton() }
+            }
+            ForEach(matches.prefix(limit)) { version in
+                versionRow(version)
+                    .opacity(versionsStale ? 0.4 : 1)
+                    .disabled(versionsStale)
+                    .task(id: "\(version.id)-\(readsMetadata)-\(versionsStale)") {
+                        if !versionsStale { await loadMetadata(version) }
+                    }
+            }
+            if !versions.isEmpty && matches.isEmpty { Text("没有匹配的版本。").font(.subheadline).foregroundStyle(Color.secondary) }
+            if versionSearch.isEmpty && matches.count > 10 {
+                Button {
+                    withAnimation(.snappy) { showAllVersions.toggle() }
+                } label: {
+                    HStack {
+                        Text(showAllVersions ? "收起" : "显示全部 \(matches.count) 个版本")
+                        Spacer()
+                        Image(systemName: "chevron.down").rotationEffect(.degrees(showAllVersions ? 180 : 0))
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("detail.versions.toggle")
+            }
+            if versions.isEmpty && !versionsLoading && versionError == nil {
+                Text("暂无历史版本").font(.subheadline).foregroundStyle(Color.secondary)
+            }
+            DisclosureGroup("手动指定版本 ID") {
+                HStack {
+                    TextField("内部版本 ID", text: $manualID).keyboardType(.numberPad)
+                    RowCapsule(title: "下载", enabled: !manualID.isEmpty && !downloadLoading) { download(versionID: manualID) }
+                }
+            }
+        } header: {
+            HStack(alignment: .firstTextBaseline) {
+                sectionTitle("版本历史")
+                Spacer()
+                RefreshButton(busy: versionsLoading) { reloadID += 1 }
+                    .accessibilityIdentifier("detail.versions.refresh")
+            }
+        }
+    }
+
+    private func versionRow(_ version: AppVersion) -> some View {
+        let name = displayVersion(version)
+        let known = name != "未知版本"
+        let reading = !known && metadataLoading.contains(version.id)
+        let note = known ? releaseNotes[name] : nil
+        let date = (metadata[version.id]?.released ?? note?.date)?.formatted(.dateTime.year().month().day())
+        let expanded = expandedNotes.contains(version.id)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(known ? "版本 \(name)" : reading ? "版本 0.0.0" : "未知版本")
+                        .font(.body.weight(.medium))
+                        .redacted(reason: reading ? .placeholder : [])
+                    Text([date, "版本 ID \(version.id)"].compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption.monospacedDigit()).foregroundStyle(Color.secondary)
+                        .textSelection(.enabled)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(.easeOut(duration: 0.2), value: name)
+                RowCapsule(title: downloadLoading && preparingVersionID == version.id ? "准备中" : "下载", enabled: !downloadLoading && !macOfficialLoading) { download(versionID: version.id) }
+                    .fixedSize(horizontal: true, vertical: false).frame(minHeight: 44).layoutPriority(1)
+                    .accessibilityLabel(known ? "下载版本 \(name)" : "下载版本 ID \(version.id)")
+                    .accessibilityIdentifier("detail.version.download." + version.id)
+            }
+            if let note, !note.text.isEmpty {
+                Button {
+                    withAnimation(.snappy) {
+                        if expanded { expandedNotes.remove(version.id) } else { expandedNotes.insert(version.id) }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(expanded ? "收起更新说明" : "更新说明")
+                        Image(systemName: "chevron.down").rotationEffect(.degrees(expanded ? 180 : 0))
+                    }
+                    .font(.caption.weight(.medium))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("detail.version.notes." + version.id)
+                if expanded {
+                    Text(note.text).font(.footnote).foregroundStyle(Color.secondary)
+                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+        .contextMenu { Button("复制版本 ID", systemImage: "doc.on.doc") { copy(version.id) } }
+    }
+
+    private func loadMetadata(_ version: AppVersion) async {
+        guard readsMetadata, metadata[version.id] == nil, !metadataLoading.contains(version.id) else { return }
+        metadataLoading.insert(version.id)
+        defer { metadataLoading.remove(version.id) }
+        do {
+            metadata[version.id] = try await store.versionMetadata(app: app, versionID: version.id)
+            metadataFailures = 0
+        } catch {
+            // Scrolled away: not a failure.
+            if Task.isCancelled || error is CancellationError { return }
+            // Never prompt from a list row; the next download asks to sign in.
+            if error is AppleAuthError || error is AppleLoginError { metadataStopped = true; return }
+            metadataFailures += 1
+            if metadataFailures >= 3 { metadataStopped = true }
+        }
+    }
+
+    @ViewBuilder private var macSection: some View {
+        CardSection {
+            Text(MacPackageDecryptor.isAvailable
+                 ? "下载完成后可导出到 Mac 安装。"
+                 : "仅支持下载未加密的 Mac 安装包。")
+                .font(.footnote).foregroundStyle(Color.secondary)
+            ForEach(macInstallers) { installer in
+                HStack(spacing: 12) {
+                    Image(systemName: "shippingbox").foregroundStyle(Color.secondary).frame(width: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(installer.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                        Text("来自开发者网站 · " + installer.format.uppercased()).font(.caption).foregroundStyle(Color.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    RowCapsule(title: "下载") { enqueueMacInstaller(installer) }
+                        .accessibilityIdentifier("mac.download." + installer.format)
+                }
+            }
+            Button("通过链接下载", systemImage: "link") { enteringMacDownloadURL = true }
+                .accessibilityIdentifier("mac.manual-download")
+            if let website = macWebsite {
+                Link(destination: website) { Label("开发者网站", systemImage: "safari") }
+            }
+        } header: {
+            // Looking for the developer's installers shows here rather than
+            // as a row that comes and goes.
+            HStack(alignment: .firstTextBaseline) {
+                sectionTitle("Mac 安装包")
+                Spacer()
+                if showsMacSpinner { ProgressView().controlSize(.small).transition(.opacity) }
+            }
+            .revealAfterDelay(macLoading, into: $showsMacSpinner)
+        }
+    }
+
+    private func copy(_ text: String) { UIPasteboard.general.string = text; store.infoMessage = "已复制到剪贴板"; UX.feedback() }
+    /// Returns whether the list was loaded. The previous list stays visible
+    /// until the new one arrives.
+    @discardableResult
+    private func fetchVersions(force: Bool) async -> Bool {
+        // An earlier error stays until this attempt settles, instead of
+        // disappearing and coming back.
+        let loadID = UUID(); versionsLoadID = loadID
+        versionsLoading = true
+        defer { if versionsLoadID == loadID { versionsLoading = false } }
+        do {
+            var result: [AppVersion]
+            do {
+                result = try await store.loadVersions(for: app, force: force, official: usesApple)
+                versionNote = nil
+            } catch is AppleLicenseError {
+                // Not got by this account yet: show what is public, and say why.
+                result = try await store.loadVersions(for: app, force: force, official: false)
+                versionNote = "此账号还没有获取这个应用，下面是公开的版本资料。获取后可查看完整列表。"
+            } catch {
+                if usesApple, let publicVersions = try? await store.loadVersions(for: app, force: force, official: false), !publicVersions.isEmpty {
+                    result = publicVersions
+                    versionNote = "Apple 版本服务暂时未返回，已为你显示公开版本列表。可稍后点击刷新重试。"
+                } else {
+                    throw error
+                }
+            }
+            try Task.checkCancellation(); versions = result; versionError = nil
+            if versionsStale { showAllVersions = false }
+            if force { metadataStopped = false; metadataFailures = 0 }
+            let cached = await store.cachedVersionMetadata(app: app, versionIDs: result.map(\.id))
+            metadata.merge(cached) { current, _ in current }
+            return true
+        } catch is CancellationError { }
+        catch AppleAuthError.reauthenticationRequired {
+            if !Task.isCancelled {
+                reauthenticationID = apple.activeID
+                retryVersionsAfterVerification = false
+                showLogin = true
+            }
+        }
+        catch AppleLoginError.verificationRequired {
+            if !Task.isCancelled {
+                retryVersionsAfterVerification = true
+                showVerification = true
+            }
+        }
+        catch {
+            if !Task.isCancelled {
+                let message = error.localizedDescription
+                if message.contains("暂时无法获取历史版本") || error is AppleLicenseError {
+                    versionError = message
+                } else if let tool = error as? ToolError, case .message(let text) = tool {
+                    versionError = text
+                } else {
+                    versionError = AppErrorMessage.forSearch(error)
+                }
+            }
+        }
+        return false
+    }
+    private func downloadAppleMacPKG(versionID: String? = nil) {
+        guard !macOfficialLoading else { return }
+        guard apple.active != nil else {
+            showLogin = true
+            return
+        }
+        macOfficialLoading = true
+        macOfficialTask = Task {
+            defer { macOfficialLoading = false; macOfficialTask = nil }
+            do {
+                let offer = try await SAPSigner.$userInitiated.withValue(true) {
+                    try await apple.macPackageOffer(app, versionID: versionID, useCache: store.settings.useSignerCache)
+                }
+                try Task.checkCancellation()
+                try store.downloads.enqueueOfficialMacPackage(offer, for: app)
+                store.infoMessage = "已开始下载"
+                store.tab = 1
+                reloadIfLicenseWasMissing()
+            } catch AppleAuthError.reauthenticationRequired {
+                reauthenticationID = apple.activeID
+                showLogin = true
+            } catch AppleLoginError.verificationRequired {
+                store.requestVerification { downloadAppleMacPKG(versionID: versionID) }
+            } catch is CancellationError { }
+            catch {
+                store.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// A download claims a free app's license, so a list that failed for
+    /// lack of one can load now.
+    private func reloadIfLicenseWasMissing() {
+        if versionNote != nil || versionError == AppleLicenseError.notOwned.errorDescription { reloadID += 1 }
+    }
+
+    private func enqueueMacInstaller(_ installer: MacInstallerService.Installer) {
+        do {
+            try store.downloads.enqueueMacInstaller(installer.url, for: app)
+            store.tab = 1
+        } catch { store.errorMessage = error.localizedDescription }
+    }
+
+    private func loadMacInstallers() async {
+        guard store.settings.store.platform == .macOS else { return }
+        macLoading = true
+        macInstallers = []
+        defer { macLoading = false }
+        var website = app.developerURL
+        if website == nil, app.id.allSatisfy({ $0.isNumber }) {
+            let query = SearchQuery.appID(app.id, versionID: nil)
+            if let matches = try? await StoreService.search(query, store: store.settings.store, limit: 1) {
+                website = matches.first(where: { $0.id == app.id })?.developerURL
+            }
+        }
+        guard !Task.isCancelled else { return }
+        macWebsite = website
+        if let website, let installers = try? await MacInstallerService.find(on: website),
+           !Task.isCancelled {
+            macInstallers = installers
+        }
+    }
+
+    private func download(versionID: String?) {
+        guard !downloadLoading else { return }
+        if let versionID, !versionID.isEmpty, !versionID.allSatisfy({ $0.isASCII && $0.isNumber }) { store.errorMessage = "版本 ID 只能包含数字"; return }
+        guard store.settings.store.platform.supportsIPA else {
+            downloadAppleMacPKG(versionID: versionID?.isEmpty == true ? nil : versionID)
+            return
+        }
+        guard apple.active != nil else { showLogin = true; return }
+        downloadLoading = true
+        preparingVersionID = versionID
+        downloadTask = Task {
+            defer { downloadLoading = false; preparingVersionID = nil; downloadTask = nil }
+            do {
+                try await store.startDownload(app: app, versionID: versionID?.isEmpty == true ? nil : versionID)
+                reloadIfLicenseWasMissing()
+                dismiss()
+            }
+            catch AppleLoginError.verificationRequired {
+                pendingDownloadVersion = versionID ?? ""
+                retryVersionsAfterVerification = false
+                showVerification = true
+            }
+            catch AppleAuthError.reauthenticationRequired {
+                reauthenticationID = apple.activeID
+                retryAfterLoginVersion = versionID ?? ""
+                showLogin = true
+            }
+            catch is CancellationError { }
+            catch { store.errorMessage = error.localizedDescription }
+        }
+    }
+}
+
+/// App Store style preview strip: screenshots side by side on the page
+/// background, snapping to the leading margin, with the next one peeking in.
+private struct ScreenshotStrip: View {
+    /// Empty while the listing is still loading: placeholders only.
+    let screenshots: [StoreService.Screenshot]
+    let platform: AppPlatform
+    let zoom: Namespace.ID
+    var open: (StoreService.Screenshot) -> Void
+    /// Loaded images. The size in a screenshot link is only the box Apple
+    /// fits the image into, so a landscape game shot can arrive under a
+    /// portrait-looking link: once all are in, lay each one out by the real image.
+    @State private var images: [URL: UIImage] = [:]
+    @State private var failed = Set<URL>()
+    private var ready: Bool { !screenshots.isEmpty && screenshots.allSatisfy { images[$0.url] != nil || failed.contains($0.url) } }
+    private func aspect(_ shot: StoreService.Screenshot) -> Double {
+        guard ready, let image = images[shot.url], image.size.height > 0 else { return shot.aspect }
+        return image.size.width / image.size.height
+    }
+    var body: some View {
+        let margin = CardSection<EmptyView, EmptyView>.pageMargin
+        let placeholders = screenshots.isEmpty
+        // iPhone shots are portrait; iPad, Apple TV and Mac shots are mostly wide.
+        let placeholderAspect = platform == .iOS ? 0.462 : platform == .iPadOS ? 1.33 : 1.6
+        VStack(alignment: .leading, spacing: 10) {
+            // Full page width: screenshots scroll from screen edge to screen
+            // edge and rest lined up with the cards.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    if placeholders {
+                        ForEach(0..<3, id: \.self) { _ in
+                            ScreenshotTile(image: nil, failed: false, cornerRadius: placeholderAspect < 1 ? 22 : 14)
+                                .aspectRatio(placeholderAspect, contentMode: .fit)
+                                .containerRelativeFrame(.horizontal) { length, _ in
+                                    Self.tileWidth(length - margin * 2, aspect: placeholderAspect)
+                                }
+                        }
+                    }
+                    ForEach(screenshots) { shot in
+                        let ratio = aspect(shot)
+                        let portrait = ratio < 1
+                        Button { open(shot) } label: {
+                            ScreenshotTile(image: ready ? images[shot.url] : nil, failed: failed.contains(shot.url),
+                                           cornerRadius: portrait ? 22 : 14)
+                                .aspectRatio(ratio, contentMode: .fit)
+                                .containerRelativeFrame(.horizontal) { length, _ in
+                                    Self.tileWidth(length - margin * 2, aspect: ratio)
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .zoomSource(shot.id, in: zoom)
+                        .accessibilityLabel("截图")
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .contentMargins(.horizontal, margin, for: .scrollContent)
+            .scrollTargetBehavior(.viewAligned)
+            .scrollDisabled(placeholders)
+            HStack(spacing: 8) {
+                DeviceGlyph(platform: platform)
+                Text(platform == .iOS ? "iPhone" : platform == .tvOS ? "Apple TV" : platform.title)
+            }
+            .font(.footnote).foregroundStyle(Color.secondary)
+            .padding(.horizontal, margin)
+        }
+        .task(id: screenshots.map(\.url)) { await load() }
+        .accessibilityIdentifier("detail.screenshots")
+    }
+
+    /// Portrait: about two thirds of the card width, so the next one shows;
+    /// landscape: nearly all of it. Never taller than 560 pt (wide screens).
+    nonisolated static func tileWidth(_ width: CGFloat, aspect: Double) -> CGFloat {
+        let width = max(1, width) * (aspect < 1 ? 0.64 : 0.92)
+        return min(width, CGFloat(560 * aspect))
+    }
+
+    private func load() async {
+        await withTaskGroup(of: (URL, UIImage?).self) { group in
+            for shot in screenshots where images[shot.url] == nil {
+                group.addTask { (shot.url, await ScreenshotCache.image(shot.url)) }
+            }
+            // Applied together, so the strip changes once.
+            var loaded = images, missing = failed
+            for await (url, image) in group {
+                if let image { loaded[url] = image } else { missing.insert(url) }
+            }
+            // Left the page or tapped early: unloaded ones aren't failures.
+            guard !Task.isCancelled else { return }
+            images = loaded; failed = missing
+        }
+    }
+}
+
+/// Where a version row will be while the list loads.
+private struct VersionRowSkeleton: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 7) {
+                RoundedRectangle(cornerRadius: 4).fill(Color(.tertiarySystemFill)).frame(width: 110, height: 15)
+                RoundedRectangle(cornerRadius: 4).fill(Color(.quaternarySystemFill)).frame(width: 170, height: 11)
+            }
+            Spacer(minLength: 8)
+            Capsule().fill(Color(.tertiarySystemFill)).frame(width: 74, height: 30)
+        }
+        .padding(.vertical, 2)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The App Store's outline device glyph under the screenshots.
+private struct DeviceGlyph: View {
+    let platform: AppPlatform
+    var body: some View {
+        switch platform {
+        case .iOS:
+            RoundedRectangle(cornerRadius: 3, style: .continuous).stroke(lineWidth: 1.2).frame(width: 10, height: 17)
+        case .iPadOS:
+            RoundedRectangle(cornerRadius: 3, style: .continuous).stroke(lineWidth: 1.2).frame(width: 14, height: 18)
+        default:
+            Image(systemName: platform.symbol)
+        }
+    }
+}
+
+/// Native grouped sections use the same surface and spacing as Retools cards.
+struct CardSection<Content: View, Header: View>: View {
+    static var pageMargin: CGFloat { 0 }
+    static var cornerRadius: CGFloat { 22 }
+    var plain = false
+    @ViewBuilder var content: Content
+    @ViewBuilder var header: Header
+    init(plain: Bool = false, @ViewBuilder content: () -> Content, @ViewBuilder header: () -> Header) {
+        self.plain = plain; self.content = content(); self.header = header()
+    }
+    var body: some View {
+        Section {
+            content.labeledContentStyle(CardLabeledContentStyle())
+                .foregroundStyle(Color.primary)
+        } header: { header.textCase(nil) }
+        .listRowBackground(plain ? Color.clear : UX.surface)
+    }
+}
+extension CardSection where Header == EmptyView {
+    init(plain: Bool = false, @ViewBuilder content: () -> Content) {
+        self.init(plain: plain, content: content) { EmptyView() }
+    }
+}
+extension View {
+    func cardRowInsets(_ insets: EdgeInsets) -> some View { listRowInsets(insets) }
+}
+
+/// Label on the left, value on the right, as in a list.
+private struct CardLabeledContentStyle: LabeledContentStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            configuration.label.foregroundStyle(Color.primary)
+            Spacer(minLength: 12)
+            configuration.content.foregroundStyle(Color.secondary).multilineTextAlignment(.trailing)
+        }
+    }
+}
+
+/// Screenshots already loaded by the strip, so the full-screen view opens
+/// on them at once.
+private enum ScreenshotCache {
+    private actor Requests {
+        var pending: [URL: Task<UIImage?, Never>] = [:]
+        func image(_ url: URL) async -> UIImage? {
+            if let image = cached(url) { return image }
+            if let task = pending[url] { return await task.value }
+            let task = Task.detached(priority: .utility) { () -> UIImage? in
+                guard let (data, _) = try? await URLSession.shared.data(from: url), let image = UIImage(data: data) else { return nil }
+                return await image.byPreparingForDisplay() ?? image
+            }
+            pending[url] = task
+            let image = await task.value
+            if let image { cache.setObject(image, forKey: url as NSURL, cost: IconCache.cost(of: image)) }
+            pending.removeValue(forKey: url)
+            return image
+        }
+    }
+    private static let requests = Requests()
+    /// Decoded screenshots are large (up to 2000 px); keep a bounded amount.
+    private static let cache: NSCache<NSURL, UIImage> = {
+        let cache = NSCache<NSURL, UIImage>(); cache.totalCostLimit = 96 * 1024 * 1024; return cache
+    }()
+    static func cached(_ url: URL) -> UIImage? { cache.object(forKey: url as NSURL) }
+    static func image(_ url: URL) async -> UIImage? {
+        if let image = cached(url) { return image }
+        return await requests.image(url)
+    }
+}
+
+private struct ScreenshotTile: View {
+    let image: UIImage?
+    let failed: Bool
+    var cornerRadius: CGFloat
+    var body: some View {
+        Rectangle().fill(Color(.tertiarySystemFill))
+            .overlay { if failed { Image(systemName: "photo").foregroundStyle(Color(uiColor: .tertiaryLabel)) } }
+            .overlay {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill().transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.25), value: image != nil)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).stroke(Color.primary.opacity(0.1), lineWidth: 0.5))
+    }
+}
+
+/// Full-screen screenshots as in the App Store: one large screenshot in the
+/// middle with its neighbours peeking in, swiped one at a time.
+private struct ScreenshotViewer: View {
+    let screenshots: [StoreService.Screenshot]
+    let selection: StoreService.Screenshot
+    @State private var current: StoreService.Screenshot.ID?
+    @State private var images: [URL: UIImage] = [:]
+    @Environment(\.dismiss) private var dismiss
+    init(screenshots: [StoreService.Screenshot], selection: StoreService.Screenshot) {
+        self.screenshots = screenshots; self.selection = selection
+        _current = State(initialValue: selection.id)
+    }
+    private func aspect(_ shot: StoreService.Screenshot) -> Double {
+        guard let image = images[shot.url] ?? ScreenshotCache.cached(shot.url), image.size.height > 0 else { return shot.aspect }
+        return image.size.width / image.size.height
+    }
+    var body: some View {
+        GeometryReader { proxy in
+            let height = max(1, proxy.size.height - 96)
+            let widest = proxy.size.width - 64
+            // Each screenshot as large as fits, leaving room for the neighbours.
+            let widths = screenshots.map { min(widest, height * aspect($0)) }
+            let margin = max(24, (proxy.size.width - (widths.max() ?? widest)) / 2)
+            ScrollViewReader { reader in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(zip(screenshots, widths)), id: \.0.id) { shot, width in
+                            let ratio = aspect(shot)
+                            ScreenshotTile(image: images[shot.url] ?? ScreenshotCache.cached(shot.url), failed: false,
+                                           cornerRadius: ratio < 1 ? 28 : 18)
+                                .frame(width: width, height: width / ratio)
+                                .frame(maxHeight: .infinity)
+                                .id(shot.id)
+                        }
+                    }
+                    .scrollTargetLayout()
+                }
+                .contentMargins(.horizontal, margin, for: .scrollContent)
+                .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+                .scrollPosition(id: $current)
+                .padding(.top, 72).padding(.bottom, 24)
+                .onAppear { reader.scrollTo(selection.id, anchor: .center) }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.title3.weight(.medium)).foregroundStyle(Color.primary)
+                    .frame(width: 48, height: 48).background(.regularMaterial, in: Circle())
+                    .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+            }
+            .padding(.trailing, 16).padding(.top, 8)
+            .accessibilityLabel("关闭")
+        }
+        .background(Color(.systemBackground).ignoresSafeArea())
+        .task(id: screenshots.map(\.url)) {
+            for shot in screenshots where images[shot.url] == nil {
+                if let image = await ScreenshotCache.image(shot.url) { images[shot.url] = image }
+            }
+        }
+    }
+}
+
+extension View {
+    /// Where a full-screen view zooms out of and back into (iOS 18 and later).
+    @ViewBuilder func zoomSource(_ id: some Hashable, in namespace: Namespace.ID) -> some View {
+        if #available(iOS 18, *) { matchedTransitionSource(id: id, in: namespace) } else { self }
+    }
+    @ViewBuilder func zoomTransition(_ id: some Hashable, in namespace: Namespace.ID) -> some View {
+        if #available(iOS 18, *) { navigationTransition(.zoom(sourceID: id, in: namespace)) } else { self }
+    }
+}
+
+/// Small cards for the developer's other apps, opening their own pages.
+private struct DeveloperAppsStrip: View {
+    let apps: [StoreApp]
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: .top, spacing: 14) {
+                ForEach(apps) { app in
+                    StoreNavigationLink { AppDetailView(app: app) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            AppIcon(url: app.iconURL, size: 76)
+                            Text(app.name).font(.caption.weight(.medium)).foregroundStyle(Color.primary)
+                                .lineLimit(2).multilineTextAlignment(.leading)
+                            if !app.displayCategory.isEmpty {
+                                Text(app.displayCategory).font(.caption2).foregroundStyle(Color.secondary).lineLimit(1)
+                            }
+                        }
+                        .frame(width: 84, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .scrollTargetLayout()
+            .padding(.vertical, 16)
+        }
+        .contentMargins(.horizontal, 20, for: .scrollContent)
+        .scrollTargetBehavior(.viewAligned)
+        .clipShape(RoundedRectangle(cornerRadius: CardSection<EmptyView, EmptyView>.cornerRadius, style: .continuous))
+        .accessibilityIdentifier("detail.developer-apps")
+    }
+}

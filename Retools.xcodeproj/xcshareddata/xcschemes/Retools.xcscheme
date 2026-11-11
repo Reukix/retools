@@ -55,6 +55,17 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "08E780064042A001EF143EFA"
+               BuildableName = "IPadnKitTests.xctest"
+               BlueprintName = "IPadnKitTests"
+               ReferencedContainer = "container:Retools.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "574F932F8DE7C75924C1A615"
                BuildableName = "RetoolsUITests.xctest"
                BlueprintName = "RetoolsUITests"

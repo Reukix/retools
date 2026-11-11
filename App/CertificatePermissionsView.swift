@@ -23,7 +23,7 @@ struct CertificatePermissionsView: View {
             Section {
                 if loading { ProgressView("正在读取权限…") }
                 else if let error { Text(error).foregroundStyle(.red) }
-                else if filtered.isEmpty { Text(search.isEmpty ? "描述文件没有声明权限" : "没有匹配的权限").foregroundStyle(.secondary) }
+                else if filtered.isEmpty { Text(search.isEmpty ? "描述文件没有声明权限" : "没有匹配的权限").foregroundStyle(Color.secondary) }
                 ForEach(filtered) { permission in
                     VStack(alignment: .leading, spacing: 7) {
                         HStack {
@@ -31,14 +31,14 @@ struct CertificatePermissionsView: View {
                             Spacer()
                             if let enabled = permission.enabled { Image(systemName: enabled ? "checkmark.circle.fill" : "minus.circle").foregroundStyle(enabled ? .green : .secondary) }
                         }
-                        if permission.title != permission.id { Text(permission.id).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled) }
+                        if permission.title != permission.id { Text(permission.id).font(.system(.caption, design: .monospaced)).foregroundStyle(Color.secondary).textSelection(.enabled) }
                         Text(permission.value).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
                     }.padding(.vertical, 4)
                 }
             } header: { Text("授权权限 · \(permissions.count) 项") } footer: {
                 Text("权限来自这份签名证书配套的描述文件。安装后的应用只能使用签名实际保留的权限；相机、相册等系统隐私授权仍需在使用时确认。")
             }
-        }.scrollContentBackground(.hidden).ambientBackground().navigationTitle("证书权限").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        }.scrollContentBackground(.hidden).ambientBackground().navigationTitle("证书权限").navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search, prompt: "搜索权限名称或标识")
             .task {
                 do { permissions = try await store.service.certificatePermissions(identity.id) }

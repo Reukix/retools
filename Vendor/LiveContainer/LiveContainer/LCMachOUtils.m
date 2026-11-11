@@ -60,6 +60,9 @@ static void insertDylibCommand(uint32_t cmd, const char *path, struct mach_heade
     const char *name = cmd==LC_ID_DYLIB ? basename((char *)path) : path;
     struct dylib_command *dylib;
     size_t cmdsize = sizeof(struct dylib_command) + rnd32((uint32_t)strlen(name) + 1, 8);
+    // Keep enough space to re-enable TweakLoader after a non-injected import.
+    // The libc++ placeholder is shorter than the real loader path.
+    if (cmd == 0x114514 && cmdsize < 0x48) cmdsize = 0x48;
     if (cmd == LC_ID_DYLIB) {
         // Make this the first load command on the list (like dylibify does), or some UE3 games may break
         dylib = (struct dylib_command *)(sizeof(struct mach_header_64) + (uintptr_t)header);
@@ -192,8 +195,24 @@ int LCPatchExecSlice(const char *path, struct mach_header_64 *header, bool doInj
     }
 
     if (dylibLoaderCommand) {
+        const char *replacement = doInject ? tweakLoaderPath : libCppPath;
+        uint32_t requiredSize = sizeof(struct dylib_command) + rnd32((uint32_t)strlen(replacement) + 1, 8);
+        if (requiredSize > dylibLoaderCommand->cmdsize) {
+            uint32_t extra = requiredSize - dylibLoaderCommand->cmdsize;
+            if (freeLoadCommandCountLeft < extra) {
+                ans |= PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER;
+                return ans;
+            }
+            uint8_t *tail = (uint8_t *)dylibLoaderCommand + dylibLoaderCommand->cmdsize;
+            uint8_t *end = (uint8_t *)(header + 1) + header->sizeofcmds;
+            memmove(tail + extra, tail, end - tail);
+            header->sizeofcmds += extra;
+            dylibLoaderCommand->cmdsize = requiredSize;
+            freeLoadCommandCountLeft -= extra;
+        }
         dylibLoaderCommand->cmd = doInject ? LC_LOAD_DYLIB : 0x114514;
-        strcpy((void *)dylibLoaderCommand + dylibLoaderCommand->dylib.name.offset, doInject ? tweakLoaderPath : libCppPath);
+        memset((void *)dylibLoaderCommand + dylibLoaderCommand->dylib.name.offset, 0, dylibLoaderCommand->cmdsize - dylibLoaderCommand->dylib.name.offset);
+        strcpy((void *)dylibLoaderCommand + dylibLoaderCommand->dylib.name.offset, replacement);
     } else  {
         if (freeLoadCommandCountLeft >= tweakLoaderLoadDylibCmdSize) {
             freeLoadCommandCountLeft -= tweakLoaderLoadDylibCmdSize;
@@ -237,35 +256,71 @@ int LCPatchExecSlice(const char *path, struct mach_header_64 *header, bool doInj
 
 NSString *LCParseMachO(const char *path, bool readOnly, LCParseMachOCallback callback) {
     int fd = open(path, readOnly ? O_RDONLY : O_RDWR, (mode_t)readOnly ? 0400 : 0600);
-    struct stat s;
-    fstat(fd, &s);
-    void *map = mmap(NULL, s.st_size, readOnly ? PROT_READ : (PROT_READ | PROT_WRITE), readOnly ? MAP_PRIVATE : MAP_SHARED, fd, 0);
-    if (map == MAP_FAILED) {
-        return [NSString stringWithFormat:@"Failed to map %s: %s", path, strerror(errno)];
+    if (fd < 0) return [NSString stringWithFormat:@"Failed to open %s: %s", path, strerror(errno)];
+    struct stat s = {0};
+    if (fstat(fd, &s) != 0 || !S_ISREG(s.st_mode) || s.st_size < sizeof(uint32_t)) {
+        close(fd);
+        return @"Failed to read Mach-O file";
+    }
+    // A guest's vnode may already have a registered signature which LC's
+    // header patches invalidate. Even a non-executable, read-only file mapping
+    // can then kill the host on a page fault. Read a detached snapshot while
+    // retaining the original fd for F_ADDFILESIGS_RETURN / F_CHECK_LV.
+    void *map = readOnly ? malloc((size_t)s.st_size) : mmap(NULL, s.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (readOnly ? map == NULL : map == MAP_FAILED) {
+        NSString *issue = [NSString stringWithFormat:@"Failed to read %s: %s", path, strerror(errno)];
+        close(fd);
+        return issue;
+    }
+    if (readOnly) {
+        off_t offset = 0;
+        while (offset < s.st_size) {
+            size_t count = (size_t)MIN(s.st_size - offset, 1024 * 1024);
+            ssize_t result = pread(fd, (uint8_t *)map + offset, count, offset);
+            if (result < 0 && errno == EINTR) continue;
+            if (result <= 0) {
+                NSString *issue = result == 0 ? @"Truncated Mach-O file" : [NSString stringWithFormat:@"Failed to read %s: %s", path, strerror(errno)];
+                free(map); close(fd);
+                return issue;
+            }
+            offset += result;
+        }
     }
 
+    NSString *issue = nil;
     uint32_t magic = *(uint32_t *)map;
     if (magic == FAT_CIGAM) {
         // Find compatible slice
         struct fat_header *header = (struct fat_header *)map;
         struct fat_arch *arch = (struct fat_arch *)(map + sizeof(struct fat_header));
-        for (int i = 0; i < OSSwapInt32(header->nfat_arch); i++) {
+        uint32_t count = s.st_size >= sizeof(struct fat_header) ? OSSwapInt32(header->nfat_arch) : 0;
+        if (count == 0 || count > ((size_t)s.st_size - sizeof(struct fat_header)) / sizeof(struct fat_arch)) issue = @"Invalid Mach-O architecture table";
+        for (uint32_t i = 0; !issue && i < count; i++) {
+            uint32_t offset = OSSwapInt32(arch->offset), size = OSSwapInt32(arch->size);
+            if (size < sizeof(struct mach_header) || (uint64_t)offset + size > (uint64_t)s.st_size) {
+                issue = @"Invalid Mach-O architecture range";
+                break;
+            }
             int cputype = OSSwapInt32(arch->cputype);
+            if (cputype == CPU_TYPE_ARM64 && size < sizeof(struct mach_header_64)) {
+                issue = @"Truncated Mach-O header";
+                break;
+            }
             if (cputype == CPU_TYPE_ARM64 || cputype == CPU_TYPE_ARM) {
-                callback(path, (struct mach_header_64 *)(map + OSSwapInt32(arch->offset)), fd, map);
+                callback(path, (struct mach_header_64 *)(map + offset), fd, map);
             }
             arch = (struct fat_arch *)((void *)arch + sizeof(struct fat_arch));
         }
-    } else if (magic == MH_MAGIC_64 || magic == MH_MAGIC) {
+    } else if ((magic == MH_MAGIC_64 && s.st_size >= sizeof(struct mach_header_64)) || (magic == MH_MAGIC && s.st_size >= sizeof(struct mach_header))) {
         callback(path, (struct mach_header_64 *)map, fd, map);
     } else {
-        return @"Not a Mach-O file";
+        issue = @"Not a Mach-O file";
     }
 
-    msync(map, s.st_size, MS_SYNC);
-    munmap(map, s.st_size);
+    if (readOnly) free(map);
+    else { msync(map, s.st_size, MS_SYNC); munmap(map, s.st_size); }
     close(fd);
-    return nil;
+    return issue;
 }
 
 NSString *LCPatchMachOFixupARM64eSlice(const char *path) {

@@ -10,19 +10,20 @@ struct PluginManagerView: View {
     private var filtered: [PluginRecord] { store.state.plugins.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.sourceFileName.localizedCaseInsensitiveContains(query) } }
     var body: some View {
         List {
+            ToolPageIntro(tool: .plugins, title: "签名插件库", detail: "导入动态库与资源，在应用详情中选择注入和调整顺序。")
             Section {
-                Button("导入插件", systemImage: "plus.circle.fill") { showImporter = true }.accessibilityIdentifier("plugins.import")
-                Text("支持 .deb 和 .dylib，可按动态库选择注入和调整顺序。").font(.footnote).foregroundStyle(.secondary)
-            }
+                ToolMetrics(items: [("插件", "\(store.state.plugins.count)"), ("动态库", "\(store.state.plugins.reduce(0) { $0 + $1.executablePaths.count })"), ("占用空间", pluginSize(store.state.plugins.reduce(0) { $0 + $1.byteCount }))])
+                Button { showImporter = true } label: { ToolActionLabel(title: "导入插件", symbol: "plus.circle.fill") }.accessibilityIdentifier("plugins.import")
+            } footer: { Text("支持 .deb 与 .dylib。导入后可检查依赖与包内文件。") }
             Section {
                 ForEach(filtered) { plugin in
                     NavigationLink { PluginDetailView(plugin: plugin) } label: {
                         HStack(spacing: 12) {
-                            Image(systemName: "puzzlepiece.extension.fill").font(.title2).foregroundStyle(.tint).frame(width: 42, height: 46)
+                            ToolGlyph(symbol: "puzzlepiece.extension.fill", color: WorkspaceTool.plugins.color, size: 42)
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(plugin.name).font(.subheadline.weight(.semibold))
-                                Text("\(plugin.kind.rawValue.uppercased()) · \(plugin.executablePaths.count) 个动态库 · \(pluginSize(plugin.byteCount))").font(.caption).foregroundStyle(.secondary)
-                                if let count = plugin.resourceCount { Text("\(count) 个资源文件").font(.caption2).foregroundStyle(.secondary) }
+                                Text(plugin.name).font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
+                                Text("\(plugin.kind.rawValue.uppercased()) · \(plugin.executablePaths.count) 个动态库 · \(pluginSize(plugin.byteCount))").font(.caption).foregroundStyle(Color.secondary)
+                                if let count = plugin.resourceCount { Text("\(count) 个资源文件").font(.caption2).foregroundStyle(Color.secondary) }
                             }
                         }.padding(.vertical, 3)
                     }.swipeActions { Button("移除", role: .destructive) { deleteTarget = plugin } }
@@ -31,7 +32,7 @@ struct PluginManagerView: View {
             } header: { Text("插件库 · \(store.state.plugins.count)") }
             pluginProgress
         }
-        .scrollContentBackground(.hidden).ambientBackground().navigationTitle("插件管理").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .toolListStyle().navigationTitle("插件管理").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, prompt: "搜索插件或文件名")
         .disabled(store.isWorking)
         .sheet(isPresented: $showImporter) { importer }
@@ -60,7 +61,13 @@ struct PluginDetailView: View {
     var body: some View {
         List {
             Section {
-                Label(record.name, systemImage: "puzzlepiece.extension.fill").font(.title3.weight(.semibold)).padding(.vertical, 5)
+                HStack(spacing: 12) {
+                    ToolGlyph(symbol: WorkspaceTool.plugins.symbol, color: WorkspaceTool.plugins.color, size: 44)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(record.name).font(.headline).foregroundStyle(Color.primary)
+                        Text("\(record.executablePaths.count) 个动态库 · " + pluginSize(record.byteCount)).font(.caption).foregroundStyle(Color.secondary)
+                    }
+                }.padding(.vertical, 5)
                 LabeledContent("原文件", value: record.sourceFileName)
                 LabeledContent("格式", value: record.kind.rawValue.uppercased())
                 LabeledContent("解包大小", value: pluginSize(record.byteCount))
@@ -71,8 +78,8 @@ struct PluginDetailView: View {
                 ForEach(record.binaries ?? []) { binary in
                     NavigationLink { PluginBinaryInformation(binary: binary) } label: {
                         VStack(alignment: .leading, spacing: 5) {
-                            Text((binary.path as NSString).lastPathComponent).font(.subheadline.weight(.medium))
-                            Text("arm64 · \(pluginSize(binary.byteCount)) · \(binary.dependencies.count) 项依赖").font(.caption).foregroundStyle(.secondary)
+                            Text((binary.path as NSString).lastPathComponent).font(.subheadline.weight(.medium)).foregroundStyle(Color.primary)
+                            Text("arm64 · \(pluginSize(binary.byteCount)) · \(binary.dependencies.count) 项依赖").font(.caption).foregroundStyle(Color.secondary)
                         }.padding(.vertical, 3)
                     }
                 }
@@ -82,7 +89,7 @@ struct PluginDetailView: View {
                 DisclosureGroup("SHA-256") { Text(record.fingerprint).font(.caption.monospaced()).textSelection(.enabled) }
             } footer: { Text("动态库和资源会一起复制到目标应用。Debian 包的安装脚本不会执行。") }
             if let issue { Section { Text(issue).foregroundStyle(.red) } }
-        }.scrollContentBackground(.hidden).ambientBackground().navigationTitle("插件详情").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        }.scrollContentBackground(.hidden).ambientBackground().navigationTitle("插件详情").navigationBarTitleDisplayMode(.inline)
             .task { do { let result = try await store.service.pluginDetails(plugin.id); details = result.0; files = result.1 } catch { issue = error.localizedDescription } }
     }
 }
@@ -94,7 +101,7 @@ private struct PluginFileList: View {
     var body: some View {
         List(files.filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) }, id: \.self) { path in
             Label(path, systemImage: executables.contains(path) ? "shippingbox" : "doc").font(.caption.monospaced()).textSelection(.enabled).padding(.vertical, 3)
-        }.navigationTitle("包内文件").searchable(text: $query, prompt: "搜索路径").toolbar(.hidden, for: .tabBar)
+        }.navigationTitle("包内文件").searchable(text: $query, prompt: "搜索路径")
     }
 }
 
@@ -102,7 +109,7 @@ struct PluginBinaryInformation: View {
     let binary: PluginBinary
     var body: some View {
         List { PluginBinarySections(binary: binary) }
-            .navigationTitle((binary.path as NSString).lastPathComponent).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            .navigationTitle((binary.path as NSString).lastPathComponent).navigationBarTitleDisplayMode(.inline)
     }
 }
 private struct PluginBinarySections: View {
@@ -125,17 +132,17 @@ private struct PluginBinarySections: View {
             ForEach(binary.dependencies) { dependency in
                 VStack(alignment: .leading, spacing: 5) {
                     Text(dependency.path).font(.caption.monospaced()).textSelection(.enabled)
-                    Text(dependency.isWeak ? "可选依赖" : "必需依赖").font(.caption2).foregroundStyle(.secondary)
+                    Text(dependency.isWeak ? "可选依赖" : "必需依赖").font(.caption2).foregroundStyle(Color.secondary)
                     if dependency.path.localizedCaseInsensitiveContains("substrate") || dependency.path.hasPrefix("/var/jb/") {
                         Label("需要插件提供相应运行库或适配路径", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange)
                     }
                 }.padding(.vertical, 3)
             }
-            if binary.dependencies.isEmpty { Text("没有动态库依赖").foregroundStyle(.secondary) }
+            if binary.dependencies.isEmpty { Text("没有动态库依赖").foregroundStyle(Color.secondary) }
         } header: { Text("动态库依赖 · \(binary.dependencies.count)") }
     }
     private func detail(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) { Text(title).font(.caption).foregroundStyle(.secondary); Text(value).font(.caption.monospaced()).textSelection(.enabled) }.padding(.vertical, 3)
+        VStack(alignment: .leading, spacing: 5) { Text(title).font(.caption).foregroundStyle(Color.secondary); Text(value).font(.caption.monospaced()).textSelection(.enabled) }.padding(.vertical, 3)
     }
 }
 
@@ -151,6 +158,8 @@ struct PluginSelectionView: View {
     @State private var showImporter = false
     @State private var query = ""
     @State private var inspected: [UUID: PluginRecord] = [:]
+    @State private var embedded: [EmbeddedLibrary]?
+    @State private var embeddedIssue: String?
     @AppStorage("RetoolsNewPluginsFirst") private var newFirst = false
     @AppStorage("RetoolsDefaultPluginWeak") private var defaultWeak = false
     private var isContainer: Bool { if case .container = target { return true }; return false }
@@ -167,14 +176,25 @@ struct PluginSelectionView: View {
             Section {
                 HStack(spacing: 12) {
                     Image(systemName: isContainer ? "shippingbox.fill" : "app.fill").font(.title).foregroundStyle(.tint)
-                    VStack(alignment: .leading, spacing: 5) { Text(targetName).font(.headline); Text(bundleID).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                    VStack(alignment: .leading, spacing: 5) { Text(targetName).font(.headline); Text(bundleID).font(.caption).foregroundStyle(Color.secondary).textSelection(.enabled) }
                 }.padding(.vertical, 5)
                 LabeledContent("注入方式", value: isContainer ? "容器启动时加载" : "逐库选择主程序或加载器")
                 LabeledContent("待注入", value: "\(entries.count) 个动态库 · \(Set(entries.map(\.pluginID)).count) 份插件")
             } footer: { Text(isContainer ? "保存后，下次启动应用生效。" : "重新签名后生效；原始 IPA 保留。") }
             Section {
+                if let embedded {
+                    ForEach(embedded.filter { $0.isInjectedPlugin && (query.isEmpty || $0.path.localizedCaseInsensitiveContains(query)) }) { library in
+                        NavigationLink { EmbeddedLibraryDetail(library: library) } label: { EmbeddedLibraryRow(library: library) }
+                    }
+                    if !embedded.contains(where: \.isInjectedPlugin) { Text("未识别到已有注入插件").foregroundStyle(Color.secondary) }
+                } else if let embeddedIssue { Text(embeddedIssue).foregroundStyle(.red) }
+                else { ProgressView("正在读取包内动态库…") }
+            } header: { Text("IPA 已注入插件" + (embedded.map { " · \($0.filter(\.isInjectedPlugin).count)" } ?? "")) }
+              footer: { Text("仅显示后期注入的插件；应用自带框架与加载支持组件不计入。下方配置额外注入项。") }
+            Section {
                 Button("添加插件", systemImage: "plus.circle.fill") { showImporter = true }.accessibilityIdentifier("plugins.add")
                 NavigationLink { PluginManagerView() } label: { Label("从插件库管理", systemImage: "puzzlepiece.extension") }
+                NavigationLink { EmbeddedLibrariesView(target: target) } label: { Label("全部动态库与依赖", systemImage: "shippingbox") }
             }
             if !entries.isEmpty {
                 Section {
@@ -182,10 +202,10 @@ struct PluginSelectionView: View {
                         if let record = records.first(where: { $0.id == entry.pluginID }) {
                             NavigationLink { options(entry.path, record: record) } label: {
                                 HStack(spacing: 10) {
-                                    Text("\((entries.firstIndex(where: { $0.id == entry.id }) ?? 0) + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 20)
+                                    Text("\((entries.firstIndex(where: { $0.id == entry.id }) ?? 0) + 1)").font(.caption.monospacedDigit()).foregroundStyle(Color.secondary).frame(width: 20)
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text((entry.path as NSString).lastPathComponent).font(.subheadline.weight(.medium))
-                                        Text("\(record.name) · \(entry.loadKind.title)").font(.caption).foregroundStyle(.secondary)
+                                        Text((entry.path as NSString).lastPathComponent).font(.subheadline.weight(.medium)).foregroundStyle(Color.primary)
+                                        Text("\(record.name) · \(entry.loadKind.title)").font(.caption).foregroundStyle(Color.secondary)
                                     }
                                 }.padding(.vertical, 3)
                             }.accessibilityIdentifier("plugins.order." + entry.id)
@@ -202,8 +222,8 @@ struct PluginSelectionView: View {
                                     .buttonStyle(.borderless).accessibilityLabel("选择 \((path as NSString).lastPathComponent)").accessibilityIdentifier("plugins.select.\((path as NSString).lastPathComponent)")
                                 NavigationLink { options(path, record: record) } label: {
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text((path as NSString).lastPathComponent).font(.subheadline)
-                                        if let binary = record.binaries?.first(where: { $0.path == path }) { Text("arm64 · \(pluginSize(binary.byteCount)) · \(binary.dependencies.count) 项依赖").font(.caption2).foregroundStyle(.secondary) }
+                                        Text((path as NSString).lastPathComponent).font(.subheadline).foregroundStyle(Color.primary)
+                                        if let binary = record.binaries?.first(where: { $0.path == path }) { Text("arm64 · \(pluginSize(binary.byteCount)) · \(binary.dependencies.count) 项依赖").font(.caption2).foregroundStyle(Color.secondary) }
                                     }.padding(.vertical, 4)
                                 }
                             }
@@ -211,12 +231,12 @@ struct PluginSelectionView: View {
                         NavigationLink { PluginDetailView(plugin: record) } label: { Label("插件信息与包内文件", systemImage: "info.circle").font(.subheadline) }
                     } label: {
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(record.name).font(.subheadline.weight(.semibold))
-                            Text("\(record.kind.rawValue.uppercased()) · 已选 \(entries.filter { $0.pluginID == record.id }.count)/\(record.executablePaths.count) · \(pluginSize(record.byteCount))").font(.caption).foregroundStyle(.secondary)
+                            Text(record.name).font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
+                            Text("\(record.kind.rawValue.uppercased()) · 已选 \(entries.filter { $0.pluginID == record.id }.count)/\(record.executablePaths.count) · \(pluginSize(record.byteCount))").font(.caption).foregroundStyle(Color.secondary)
                         }.padding(.vertical, 4)
                     }
                 }
-                if filtered.isEmpty { Text(records.isEmpty ? "添加 .deb 或 .dylib 后，逐个选择需要注入的动态库。" : "没有匹配的动态库").font(.subheadline).foregroundStyle(.secondary) }
+                if filtered.isEmpty { Text(records.isEmpty ? "添加 .deb 或 .dylib 后，逐个选择需要注入的动态库。" : "没有匹配的动态库").font(.subheadline).foregroundStyle(Color.secondary) }
             } header: { Text("可用插件") }
             Section {
                 Toggle("新插件放在最前", isOn: $newFirst)
@@ -226,7 +246,7 @@ struct PluginSelectionView: View {
             } header: { Text("添加选项") } footer: { Text("只影响之后添加的项；现有顺序和加载方式保留。插件资源会随包复制。") }
             if let error = store.pluginIssue { Section { Text(error).font(.footnote).foregroundStyle(.red) } }
         }
-        .navigationTitle(isContainer ? "动态注入插件" : "签名注入插件").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .navigationTitle(isContainer ? "动态注入插件" : "签名注入插件").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, prompt: "搜索插件或动态库")
         .toolbar { ToolbarItem(placement: .primaryAction) { EditButton() } }
         .safeAreaInset(edge: .bottom) {
@@ -259,6 +279,10 @@ struct PluginSelectionView: View {
                 do { inspected[record.id] = try await store.service.pluginDetails(record.id).0 } catch { store.pluginIssue = error.localizedDescription }
             }
         }
+        .task(id: target) {
+            do { embedded = try await store.service.embeddedLibraries(for: target) }
+            catch { embeddedIssue = error.localizedDescription }
+        }
     }
     private func contains(_ path: String, _ record: PluginRecord) -> Bool { entries.contains { $0.pluginID == record.id && $0.path == path } }
     private func add(_ path: String, _ record: PluginRecord) { let entry = PluginInjection(pluginID: record.id, path: path, loadKind: defaultWeak ? .optional : .required, signingTarget: isContainer ? nil : defaultSigningTarget); if projectNewPluginsFirst ?? newFirst { entries.insert(entry, at: 0) } else { entries.append(entry) } }
@@ -287,6 +311,6 @@ private struct PluginInjectionOptions: View {
             } footer: { Text("必须加载：加载失败时停止启动。可选加载：加载器无法加载时允许继续启动，插件功能可能不可用。") }
             if let binary { PluginBinarySections(binary: binary) }
             Section { NavigationLink { PluginDetailView(plugin: record) } label: { Label("查看插件包与资源", systemImage: "folder") } }
-        }.navigationTitle((path as NSString).lastPathComponent).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        }.navigationTitle((path as NSString).lastPathComponent).navigationBarTitleDisplayMode(.inline)
     }
 }

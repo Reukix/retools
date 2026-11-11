@@ -106,12 +106,12 @@ struct AIChatView: View {
                     .shadow(color: Palette.shadow.opacity(1.5), radius: 16, x: 0, y: 8).padding(.bottom, 6)
                 Text("有什么可以帮你？").font(.title2.weight(.bold))
                 Text("正在使用 \(modelName ?? model)。可以附加图片、视频或文件，点击顶部切换模型。")
-                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).lineSpacing(3)
+                    .font(.subheadline).foregroundStyle(Color.secondary).multilineTextAlignment(.center).lineSpacing(3)
             } else {
                 GlyphTile(symbol: "sparkles", size: 80).padding(.bottom, 6)
                 Text("连接 AI 接口").font(.title2.weight(.bold))
                 Text("填写 API 地址和密钥后自动读取模型，支持 OpenAI 兼容与 Anthropic 协议。")
-                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).lineSpacing(3)
+                    .font(.subheadline).foregroundStyle(Color.secondary).multilineTextAlignment(.center).lineSpacing(3)
                 Button { composerFocused = false; showSettings = true } label: { Label("设置 AI 接口", systemImage: "key.fill") }
                     .buttonStyle(GradientCapsuleButtonStyle()).padding(.top, 6)
             }
@@ -131,21 +131,21 @@ struct AIChatView: View {
             if let issue = chat.issue {
                 HStack(alignment: .top) { Text(issue).font(.footnote).foregroundStyle(.red); Spacer(); Button { chat.issue = nil } label: { Image(systemName: "xmark").frame(minWidth: 44, minHeight: 44) }.buttonStyle(.borderless).accessibilityLabel("关闭提示") }.accessibilityIdentifier("ai.error")
             }
-            if !chat.canContinue { HStack { Text("接口已更改，历史对话仍可查看。").font(.caption).foregroundStyle(.secondary); Spacer(); Button("新建对话") { chat.newConversation() }.font(.caption) } }
+            if !chat.canContinue { HStack { Text("接口已更改，历史对话仍可查看。").font(.caption).foregroundStyle(Color.secondary); Spacer(); Button("新建对话") { chat.newConversation() }.font(.caption) } }
             VStack(alignment: .leading, spacing: 4) {
                 if !chat.draftAttachments.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) { ForEach(chat.draftAttachments) { attachment in draftCard(attachment) } }.padding(.horizontal, 12).padding(.top, 12)
                     }.accessibilityIdentifier("ai.attachments")
                 }
-                if chat.isImporting { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在准备附件…").font(.caption).foregroundStyle(.secondary) }.padding(.horizontal, 16).padding(.top, 8) }
+                if chat.isImporting { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在准备附件…").font(.caption).foregroundStyle(Color.secondary) }.padding(.horizontal, 16).padding(.top, 8) }
                 HStack(alignment: .bottom, spacing: 8) {
                     Menu {
                         Button("照片与视频", systemImage: "photo.on.rectangle.angled") { composerFocused = false; showPhotos = true }
                         Button("选择文件", systemImage: "folder") { composerFocused = false; showFiles = true }
                     } label: { Label("添加附件", systemImage: "plus").labelStyle(.iconOnly).font(.title3).frame(width: 36, height: 44) }
                         .buttonStyle(.borderless).disabled(chat.isImporting).accessibilityLabel("添加附件").accessibilityIdentifier("ai.addAttachment")
-                    TextField("询问 AI", text: $chat.draftText, axis: .vertical).textFieldStyle(.plain).focused($composerFocused).lineLimit(1...6).font(.body).foregroundStyle(.primary).padding(.vertical, 11).accessibilityIdentifier("ai.input")
+                    TextField("询问 AI", text: $chat.draftText, axis: .vertical).textFieldStyle(.plain).focused($composerFocused).lineLimit(1...6).font(.body).foregroundStyle(Color.primary).padding(.vertical, 11).accessibilityIdentifier("ai.input")
                     Button {
                         if chat.isGenerating { chat.stop() }
                         else if chat.send(chat.draftText) { followReply = true }
@@ -167,7 +167,7 @@ struct AIChatView: View {
                 HStack(spacing: 9) {
                     imageSource(attachmentIcon(attachment, size: 44), attachment)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(attachment.name).font(.caption.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+                        Text(attachment.name).font(.caption.weight(.medium)).foregroundStyle(Color.primary).lineLimit(1)
                         Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file)).font(.caption2).foregroundStyle(Color.secondary)
                     }.frame(maxWidth: 120, alignment: .leading)
                 }
@@ -185,7 +185,7 @@ struct AIChatView: View {
             HStack {
                 Spacer(minLength: 28)
                 VStack(alignment: .trailing, spacing: 10) {
-                    if let attachments = message.attachments { ForEach(attachments) { attachment in Button { openPreview(attachment, cornerRadius: 9) } label: { HStack(spacing: 10) { imageSource(attachmentIcon(attachment, size: 48), attachment); Text(attachment.name).font(.subheadline).foregroundStyle(.primary).lineLimit(2); Image(systemName: "arrow.up.right").font(.caption) }.padding(10).background(Palette.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous)).overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Palette.border, lineWidth: 1)) }.buttonStyle(.borderless) } }
+                    if let attachments = message.attachments { ForEach(attachments) { attachment in Button { openPreview(attachment, cornerRadius: 9) } label: { HStack(spacing: 10) { imageSource(attachmentIcon(attachment, size: 48), attachment); Text(attachment.name).font(.subheadline).foregroundStyle(Color.primary).lineLimit(2); Image(systemName: "arrow.up.right").font(.caption) }.padding(10).background(Palette.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous)).overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Palette.border, lineWidth: 1)) }.buttonStyle(.borderless) } }
                     if !message.content.isEmpty { Text(message.content).foregroundStyle(.white).tint(.white).textSelection(.enabled).padding(.horizontal, 15).padding(.vertical, 11)
                         .background(Palette.accentGradient, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20, style: .continuous))
                         .shadow(color: Palette.accent.opacity(0.22), radius: 10, x: 0, y: 5) }
@@ -197,10 +197,10 @@ struct AIChatView: View {
                 HStack(spacing: 7) {
                     AIModelIcon(model: replyModel, provider: chat.current?.connection.provider, size: 14)
                         .frame(width: 26, height: 26).background(Palette.surface, in: Circle()).overlay(Circle().strokeBorder(Palette.border, lineWidth: 1))
-                    Text(replyModel.isEmpty ? "AI" : replyModel).foregroundStyle(.secondary).lineLimit(1)
+                    Text(replyModel.isEmpty ? "AI" : replyModel).foregroundStyle(Color.secondary).lineLimit(1)
                 }.font(.caption.weight(.medium)).accessibilityElement(children: .combine)
                 if message.content.isEmpty, message.attachments?.isEmpty != false, message.status == .streaming {
-                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在回应…").font(.footnote).foregroundStyle(.secondary) }
+                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在回应…").font(.footnote).foregroundStyle(Color.secondary) }
                 }
                 if !message.content.isEmpty { AIMessageContent(text: message.content) }
                 if let attachments = message.attachments { ForEach(attachments) { attachment in generatedImage(attachment) } }
@@ -211,7 +211,7 @@ struct AIChatView: View {
                         ShareLink(item: message.content) { Label("分享回答", systemImage: "square.and.arrow.up").labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44) }.accessibilityLabel("分享回答")
                     }
                     if message.id == chat.current?.messages.last?.id, message.status == .failed || message.status == .stopped { Button { chat.retry() } label: { Label("重试", systemImage: "arrow.clockwise").frame(minHeight: 44) } }
-                }.font(.subheadline).foregroundStyle(.secondary).buttonStyle(.borderless).disabled(chat.isGenerating).padding(.top, -6)
+                }.font(.subheadline).foregroundStyle(Color.secondary).buttonStyle(.borderless).disabled(chat.isGenerating).padding(.top, -6)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -297,7 +297,7 @@ private struct AICodeBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(language.isEmpty ? "代码" : language).font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text(language.isEmpty ? "代码" : language).font(.caption.monospaced()).foregroundStyle(Color.secondary)
                 Spacer()
                 Button {
                     UIPasteboard.general.string = code; copied = true

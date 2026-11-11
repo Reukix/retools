@@ -1,3 +1,4 @@
+import IPadnKit
 import SwiftUI
 import ContainerControls
 import RetoolsNative
@@ -25,8 +26,15 @@ struct RetoolsApp: App {
                     installDock()
                     if !SigningMigrationController.shared.needsRecovery, await store.handleContainerControl() { return }
                     let arguments = ProcessInfo.processInfo.arguments
+                    if !handledLaunchAction, arguments.contains("--check-local-file-writing") {
+                        handledLaunchAction = true
+                        store.isWorking = true; store.workLabel = "正在验证本机文件读写…"
+                        defer { store.isWorking = false; store.workLabel = "" }
+                        await LocalFileWriteDiagnostics.run(paths: store.paths)
+                        return
+                    }
                     if !handledLaunchAction, arguments.contains("--open-decryption") {
-                        handledLaunchAction = true; store.selectedTab = .library; store.showDecryption = true; return
+                        handledLaunchAction = true; store.selectedTab = .tools; store.showDecryption = true; return
                     }
                     if !handledLaunchAction, arguments.contains("--check-store-setup") || arguments.contains("--check-store-device-auth") {
                         handledLaunchAction = true
@@ -90,6 +98,11 @@ struct RetoolsApp: App {
                         await DeviceToolsStore.shared.checkProcessReading(renewal: renewal, report: store.paths.support.appendingPathComponent("ProcessReadingCheck.json"))
                         return
                     }
+                    if !handledLaunchAction, arguments.contains("--check-app-sizes") {
+                        handledLaunchAction = true
+                        await DeviceToolsStore.shared.checkAppSizeReading(renewal: renewal, report: store.paths.support.appendingPathComponent("AppSizeReadingCheck.json"))
+                        return
+                    }
                     if !handledLaunchAction, arguments.contains("--renew-now") {
                         handledLaunchAction = true
                         _ = await renewal.renew(force: true)
@@ -118,13 +131,13 @@ struct RetoolsApp: App {
                         } catch { store.errorMessage = error.localizedDescription }
                     }
                 }
+                .preferredColorScheme(storeReviewAppearance)
                 .onChange(of: store.state.containerApps) { _, _ in installDock() }
                 .onChange(of: store.state.packages) { _, _ in ExpiryPublisher.publish(store: store, renewal: renewal) }
                 .onChange(of: store.isWorking) { _, busy in if !busy { RetoolsContainerControls.finishWorkbenchRequest() } }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         Task { await AppSourceStore.shared.refreshIfStale() }
-                        Task { await DeviceToolsStore.shared.autoMountOnLaunch(renewal: renewal) }
                         ExpiryPublisher.publish(store: store, renewal: renewal)
                         renewal.attach(store); SigningMigrationController.shared.inspect()
                         installDock()
@@ -132,12 +145,23 @@ struct RetoolsApp: App {
                             Task { if !(await store.handleContainerControl()) { renewal.foregroundCheck() } }
                         }
                     } else if phase == .background {
+                        StoreBrowserRuntime.didEnterBackground()
                         DeviceToolsStore.shared.appDidEnterBackground()
                         DeviceLogStore.shared.appDidEnterBackground()
                         if renewal.isWorking { AuthDiagnostics.record(stage: "后台续签", message: "当前续签任务已进入后台，继续执行签名与安装") }
                     }
                 }
         }
+    }
+    private var storeReviewAppearance: ColorScheme? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--store-browser-preview") {
+            if arguments.contains("--store-browser-light") { return .light }
+            if arguments.contains("--store-browser-dark") { return .dark }
+        }
+        #endif
+        return nil
     }
     private func installDock() {
         #if DEBUG
@@ -161,6 +185,7 @@ struct WorkspaceRoot: View {
             LibraryView().tag(WorkspaceTab.library).tabItem { Label("应用库", systemImage: "square.grid.2x2") }
             if aiEnabled { AIChatView().tag(WorkspaceTab.chat).tabItem { Label("AI", systemImage: "bubble.left.and.bubble.right") } }
             ContainersView().tag(WorkspaceTab.containers).tabItem { Label("容器", systemImage: "shippingbox") }
+            ToolsView().tag(WorkspaceTab.tools).tabItem { Label("工具", systemImage: "wrench.and.screwdriver") }
             // 每个标签图标都有实心版本，选中与未选中时粗细一致。
             SettingsView().tag(WorkspaceTab.settings).tabItem { Label("设置", systemImage: "gearshape") }
         }
@@ -177,7 +202,7 @@ struct WorkspaceRoot: View {
                         if renewal.isWorking, !renewal.activeAccounts.isEmpty {
                             RenewalAccountsProgress(renewal: renewal)
                         } else {
-                            Text("大体积应用可能需要一点时间").font(.caption).foregroundStyle(.secondary)
+                            Text("大体积应用可能需要一点时间").font(.caption).foregroundStyle(Color.secondary)
                         }
                     }.padding(26).frame(maxWidth: 360).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous)).padding(24)
                 }.accessibilityIdentifier("workspace.progress")
@@ -225,14 +250,14 @@ struct RenewalAccountsProgress: View {
         VStack(alignment: .leading, spacing: 10) {
             let done = renewal.activeAccounts.filter { renewal.accountOutcome[$0] != nil }.count
             Text(renewal.activeAccounts.count > 1 ? "\(renewal.activeAccounts.count) 个账号同时准备，安装逐个进行 · 已完成 \(done)" : "续签进度")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Color.secondary)
             ForEach(renewal.activeAccounts, id: \.self) { id in
                 HStack(spacing: 10) {
                     Text(String(id.prefix(1)).uppercased()).font(.subheadline.weight(.bold)).foregroundStyle(.white)
                         .frame(width: 30, height: 30).background(Palette.accentGradient, in: Circle())
                     VStack(alignment: .leading, spacing: 2) {
                         Text(id).font(.caption.weight(.semibold)).lineLimit(1).truncationMode(.middle)
-                        Text(renewal.accountProgress[id] ?? "等待开始…").font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                        Text(renewal.accountProgress[id] ?? "等待开始…").font(.caption2).foregroundStyle(Color.secondary).lineLimit(2)
                     }
                     Spacer(minLength: 6)
                     switch renewal.accountOutcome[id] {

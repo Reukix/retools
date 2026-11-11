@@ -1,10 +1,348 @@
 import XCTest
 
 final class WorkspaceUITests: XCTestCase {
+    func testStoreBrowserNavigationAndHistoricalVersions() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--store-browser-preview", "--store-browser-light", "-RetoolsFloatingControlsEnabled", "NO"]
+        app.launch(); tapTab("工具", in: app)
+        let tool = app.buttons["tools.storeDownload"]; scrollTo(tool, in: app); tool.tap()
+        let sections = app.segmentedControls["storeBrowser.sections"]
+        XCTAssertTrue(sections.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.tabBars.buttons["工具"].isHittable)
+        XCTAssertTrue(sections.buttons["发现"].isSelected)
+        capture("StoreDiscoverLight", app: app)
+        let history = app.buttons["history.效率工具"]
+        scrollTo(history, in: app); history.swipeLeft()
+        app.buttons["删除"].firstMatch.tap()
+        XCTAssertFalse(history.exists)
+        if app.buttons["notice.undo"].exists { app.buttons["notice.undo"].tap() }
+        let favorite = app.staticTexts["像素日记"].firstMatch
+        scrollTo(favorite, in: app); favorite.tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertFalse(sections.isHittable)
+        capture("StoreAppDetailLight", app: app)
+        let manual = app.buttons["手动指定版本 ID"]; scrollTo(manual, in: app); manual.tap()
+        XCTAssertTrue(app.textFields["内部版本 ID"].waitForExistence(timeout: 3))
+        capture("StoreVersionsLight", app: app)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
+        XCTAssertTrue(sections.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.tabBars.buttons["工具"].isHittable)
+        sections.buttons["下载"].tap()
+        XCTAssertTrue(app.staticTexts["商店功能预览"].firstMatch.waitForExistence(timeout: 5))
+        capture("StoreDownloadsLight", app: app)
+        sections.buttons["账号"].tap()
+        app.buttons["accounts.settings"].tap()
+        scrollTo(app.switches["settings.pro-mode"], in: app)
+        XCTAssertTrue(app.switches["settings.pro-mode"].exists)
+        capture("StoreSettingsLight", app: app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(sections.exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.tabBars.buttons["工具"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["工具"].isSelected)
+    }
+    func testStoreBrowserDarkAppearance() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--store-browser-preview", "--store-browser-dark", "-RetoolsFloatingControlsEnabled", "NO"]
+        app.launch(); tapTab("工具", in: app)
+        let tool = app.buttons["tools.storeDownload"]; scrollTo(tool, in: app); tool.tap()
+        let sections = app.segmentedControls["storeBrowser.sections"]
+        XCTAssertTrue(sections.waitForExistence(timeout: 8))
+        capture("StoreDiscoverDark", app: app)
+        sections.buttons["下载"].tap()
+        app.buttons["downloads.add"].tap(); app.buttons["downloads.import"].tap()
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel"])).firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 8)); cancel.tap()
+        XCTAssertFalse(app.alerts["操作未完成"].exists)
+        capture("StoreDownloadsDark", app: app)
+        app.buttons["download.install.preview-ipa"].tap()
+        XCTAssertTrue(app.navigationBars["安装到本机"].waitForExistence(timeout: 8))
+        capture("StoreVersionInstallationDark", app: app)
+        app.buttons["完成"].tap()
+        XCTAssertTrue(sections.waitForExistence(timeout: 5))
+        sections.buttons["已购"].tap(); capture("StorePurchasedDark", app: app)
+        sections.buttons["账号"].tap(); capture("StoreAccountDark", app: app)
+        let login = app.staticTexts["登录 Apple 账户"].firstMatch; scrollTo(login, in: app); login.tap()
+        XCTAssertTrue(app.textFields["邮箱或电话号码"].waitForExistence(timeout: 5))
+        capture("StoreLoginDark", app: app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.tabBars.buttons["工具"].waitForExistence(timeout: 5))
+    }
+    func testHistoricalDownloadShowsProgressAndOpensNativeInstallation() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--store-browser-preview", "--store-browser-download-preview", "-RetoolsFloatingControlsEnabled", "NO"]
+        app.launch(); tapTab("工具", in: app)
+        let tool = app.buttons["tools.storeDownload"]; scrollTo(tool, in: app); tool.tap()
+        app.staticTexts["像素日记"].firstMatch.tap()
+        let official = app.switches["detail.versions.official"]
+        scrollTo(official, in: app)
+        XCTAssertTrue(official.isHittable)
+        let officialLabel = app.staticTexts["detail.versions.official.label"]
+        XCTAssertTrue(officialLabel.exists)
+        XCTAssertLessThan(abs(officialLabel.frame.midY - official.frame.midY), 8)
+        let download = app.buttons["detail.version.download.123456788"]
+        scrollTo(download, in: app); XCTAssertTrue(download.isHittable)
+        capture("StoreVersionControls", app: app)
+        download.tap()
+        let sections = app.segmentedControls["storeBrowser.sections"]
+        XCTAssertTrue(sections.waitForExistence(timeout: 5)); XCTAssertTrue(sections.buttons["下载"].isSelected)
+        XCTAssertTrue(app.descendants(matching: .any)["download.progress.preview-app"].firstMatch.waitForExistence(timeout: 5))
+        capture("StoreHistoricalDownloadProgress", app: app)
+        let install = app.buttons["download.install.preview-app"]
+        XCTAssertTrue(install.waitForExistence(timeout: 20)); install.tap()
+        XCTAssertTrue(app.navigationBars["安装到本机"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.segmentedControls["installation.method"].exists)
+        capture("StoreDirectInstallation", app: app)
+    }
+    func testStoreInstallationSettingsUseWorkbenchResources() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--store-browser-preview", "-RetoolsFloatingControlsEnabled", "NO"]
+        app.launch(); tapTab("工具", in: app)
+        let tool = app.buttons["tools.storeDownload"]; scrollTo(tool, in: app); tool.tap()
+        app.segmentedControls["storeBrowser.sections"].buttons["账号"].tap()
+        app.buttons["accounts.settings"].tap()
+        let installation = app.buttons["安装设置"]; scrollTo(installation, in: app); installation.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["storeSettings.certificates.count"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.segmentedControls["installation.method"].exists)
+        XCTAssertFalse(app.textFields["服务器地址"].exists)
+        XCTAssertFalse(app.staticTexts["ipadn.localtest.me"].exists)
+        capture("StoreUnifiedInstallationSettings", app: app)
+        app.buttons["storeSettings.certificates.manage"].tap()
+        XCTAssertTrue(app.navigationBars["证书管理"].waitForExistence(timeout: 5))
+        capture("StoreSharedCertificateManager", app: app)
+    }
+    /// The dedicated LC feature fixture is prepared locally before this test.
+    func testExistingInjectedIPAAndContainerCompatibilitySettings() throws {
+        let app = XCUIApplication(); app.launchArguments = ["-RetoolsFloatingControlsEnabled", "NO", "-AppleInterfaceStyle", "Dark"]; app.launch()
+        let package = app.buttons["library.package.77777777-7777-4777-8777-777777777777"]
+        guard package.waitForExistence(timeout: 5) else { throw XCTSkip("Seed the dedicated LC compatibility fixture first") }
+        package.tap()
+        XCTAssertTrue(app.navigationBars["签名配置"].waitForExistence(timeout: 5))
+        let existing = app.buttons["project.embeddedLibraries"]
+        scrollToMiddle(existing, in: app)
+        XCTAssertTrue(app.staticTexts["Lead.dylib"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["project.pluginCount"].label, "1")
+        XCTAssertFalse(app.staticTexts["AAASSOptimizer"].exists)
+        XCTAssertFalse(app.staticTexts["TelegramCore"].exists)
+        capture("SigningPluginCard", app: app)
+        existing.tap()
+        XCTAssertTrue(app.navigationBars["已注入插件"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["embedded.library.Frameworks/Lead.dylib"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["embedded.library.Frameworks/AAASSOptimizer.framework/AAASSOptimizer"].exists)
+        capture("ExistingInjectedLibrary", app: app)
+        app.terminate(); app.launch()
+        tapTab("容器", in: app)
+        let container = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "容器兼容回归")).firstMatch
+        XCTAssertTrue(container.waitForExistence(timeout: 5)); container.tap()
+        app.buttons["container.appSettings"].tap()
+        XCTAssertTrue(app.navigationBars["应用兼容设置"].waitForExistence(timeout: 5))
+        let sdk = app.switches["container.options.sdk"], hidden = app.switches["container.options.hideHost"]
+        scrollToMiddle(sdk, in: app)
+        XCTAssertTrue(sdk.isEnabled)
+        XCTAssertEqual(sdk.value as? String, "1")
+        sdk.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
+        hidden.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
+        XCTAssertEqual(sdk.value as? String, "0"); XCTAssertEqual(hidden.value as? String, "1")
+        capture("ContainerCompatibilitySettings", app: app)
+        app.buttons["container.options.save"].tap()
+        XCTAssertTrue(app.buttons["container.appSettings"].waitForExistence(timeout: 5))
+        app.buttons["container.appSettings"].tap()
+        scrollToMiddle(sdk, in: app)
+        XCTAssertEqual(sdk.value as? String, "0"); XCTAssertEqual(hidden.value as? String, "1")
+        sdk.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
+        hidden.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
+        app.buttons["container.options.save"].tap()
+        XCTAssertTrue(app.buttons["container.appSettings"].waitForExistence(timeout: 5))
+    }
+    func testDeviceAppSizesFinishLoadingInsideDetailAndRemainInList() {
+        let app = XCUIApplication(); app.launchArguments = ["--app-review-slow-sizes"]; app.launch()
+        tapTab("工具", in: app)
+        app.buttons["tools.apps"].tap()
+        let utm = app.buttons["deviceTools.app.com.utmapp.UTM"]
+        XCTAssertTrue(utm.waitForExistence(timeout: 5)); utm.tap()
+        let bundle = app.descendants(matching: .any)["deviceTools.app.bundleSize"].firstMatch
+        let data = app.descendants(matching: .any)["deviceTools.app.dataSize"].firstMatch
+        XCTAssertTrue(bundle.waitForExistence(timeout: 5))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "412"), object: bundle)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
+        XCTAssertTrue(data.label.contains("2.3"))
+        capture("DeviceAppStorageDetail", app: app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let row = app.staticTexts["deviceTools.app.storage.com.utmapp.UTM"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.label.contains("应用") && row.label.contains("412"))
+        XCTAssertTrue(row.label.contains("数据") && row.label.contains("2.3"))
+        capture("DeviceAppStorageList", app: app)
+    }
+
+    func testAIKeyboardKeepsTabBarHiddenWhileTypingAndRestoresItOnDismissal() {
+        let app = XCUIApplication(); app.launchArguments = ["-RetoolsAIEnabled", "YES"]; app.launch()
+        tapTab("AI", in: app)
+        let input = app.descendants(matching: .any)["ai.input"].firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        input.typeText("Navigation check")
+        XCTAssertFalse(app.tabBars.firstMatch.exists && app.tabBars.firstMatch.isHittable)
+        app.scrollViews["ai.messages"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["设置"].isHittable)
+        XCTAssertTrue(app.buttons["ai.history"].isHittable)
+        tapTab("设置", in: app)
+        let entry = app.buttons["settings.ai"]
+        scrollToMiddle(entry, in: app); entry.tap()
+        XCTAssertTrue(app.navigationBars["AI 接口"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.tabBars.firstMatch.exists && app.tabBars.firstMatch.isHittable)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.tabBars.buttons["设置"].isHittable)
+    }
+
+    func testReturningFromToolsAndSettingsRestoresTheRootTabBar() {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(app.buttons["library.import"].waitForExistence(timeout: 5))
+        tapTab("工具", in: app)
+        let bar = app.tabBars.firstMatch
+        let originalFrame = bar.frame
+        app.buttons["tools.localFiles"].tap()
+        XCTAssertTrue(app.navigationBars["本机文件"].waitForExistence(timeout: 5))
+        XCTAssertFalse(bar.exists && bar.isHittable)
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 {
+            let parent = app.buttons["App Group 总目录"]
+            scrollToMiddle(parent, in: app); parent.tap()
+            XCTAssertTrue(app.navigationBars["App Group 总目录"].waitForExistence(timeout: 5))
+            XCTAssertFalse(bar.exists && bar.isHittable)
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(app.navigationBars["本机文件"].waitForExistence(timeout: 5))
+            XCTAssertFalse(bar.exists && bar.isHittable)
+        }
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.tabBars.buttons["工具"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["工具"].isHittable)
+        XCTAssertEqual(bar.frame.minY, originalFrame.minY, accuracy: 1)
+        app.buttons["tools.category.developer"].tap()
+        app.buttons["tools.runtime"].tap()
+        XCTAssertTrue(app.navigationBars["容器运行设置"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["tools.category.developer"].isSelected)
+        XCTAssertTrue(app.buttons["tools.runtime"].isHittable)
+        tapTab("设置", in: app)
+        let certificates = app.buttons["settings.certificates"]
+        certificates.tap()
+        XCTAssertTrue(app.navigationBars["证书管理"].waitForExistence(timeout: 5))
+        XCTAssertFalse(bar.exists && bar.isHittable)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.tabBars.buttons["设置"].isHittable)
+        XCTAssertTrue(certificates.isHittable)
+        capture("NavigationReturnRoot", app: app)
+    }
+
+    func testInteractiveBackCancellationKeepsDetailAndCompletingBackRestoresTabs() {
+        let app = XCUIApplication(); app.launch()
+        tapTab("工具", in: app)
+        app.buttons["tools.localFiles"].tap()
+        XCTAssertTrue(app.navigationBars["本机文件"].waitForExistence(timeout: 5))
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+        let partial = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: partial, withVelocity: .slow, thenHoldForDuration: 0.5)
+        XCTAssertTrue(app.navigationBars["本机文件"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.tabBars.firstMatch.exists && app.tabBars.firstMatch.isHittable)
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertTrue(app.navigationBars["工具"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["工具"].isHittable)
+        XCTAssertTrue(app.buttons["tools.localFiles"].isHittable)
+        capture("InteractiveNavigationReturn", app: app)
+    }
+
+    func testCacheCleanupIsAvailableFromDecryptionAndSettings() {
+        let app = XCUIApplication(); app.launch()
+        tapTab("工具", in: app)
+        app.buttons["tools.decryption"].tap()
+        let cache = app.buttons["decryption.cache"]
+        scrollToMiddle(cache, in: app); XCTAssertTrue(cache.isEnabled); cache.tap()
+        XCTAssertTrue(app.navigationBars["缓存清理"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["decryption.cache.clear"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["decryption.cache.size"].firstMatch.exists)
+        capture("DecryptionCacheCleanup", app: app)
+        app.buttons["完成"].tap()
+        XCTAssertTrue(app.navigationBars["应用砸壳"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tapTab("设置", in: app)
+        let settings = app.buttons["settings.cache"]
+        scrollToMiddle(settings, in: app); settings.tap()
+        XCTAssertTrue(app.navigationBars["缓存清理"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["decryption.cache.clear"].exists)
+    }
+
+    func testAppGroupParentEntryOpensLocalBrowserOnIOS27() {
+        guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 else { return }
+        let app = XCUIApplication(); app.launch()
+        tapTab("工具", in: app)
+        app.buttons["tools.localFiles"].tap()
+        let parent = app.buttons["App Group 总目录"]
+        scrollToMiddle(parent, in: app); XCTAssertTrue(parent.exists); parent.tap()
+        XCTAssertTrue(app.navigationBars["App Group 总目录"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["本机访问 · 读写"].exists)
+        let failure = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "deviceTools.files.failure", "模拟器")).firstMatch
+        XCTAssertTrue(failure.waitForExistence(timeout: 5))
+        capture("AppGroupParentBrowser", app: app)
+    }
+
+    func testToolsSearchCategoriesFavoritesAndDirectAppEntry() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-RetoolsFavoriteTools", "[\"localFiles\",\"decryption\",\"apps\",\"processes\"]"]
+        app.launch()
+        tapTab("工具", in: app)
+        XCTAssertTrue(app.buttons["tools.localFiles"].waitForExistence(timeout: 5))
+        capture("ToolsHome", app: app)
+        let search = app.textFields["tools.search"]
+        search.tap(); search.typeText("日志")
+        XCTAssertTrue(app.buttons["tools.logs"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["tools.crashes"].exists)
+        XCTAssertFalse(app.buttons["tools.localFiles"].exists)
+        capture("ToolsSearch", app: app)
+        app.buttons["tools.search.clear"].tap()
+        app.buttons["tools.category.developer"].tap()
+        XCTAssertTrue(app.buttons["tools.processes"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["tools.runtime"].exists)
+        XCTAssertFalse(app.buttons["tools.apps"].exists)
+        capture("ToolsDeveloper", app: app)
+        app.buttons["tools.category.all"].tap()
+        app.buttons["tools.favorites.edit"].tap()
+        XCTAssertTrue(app.navigationBars["常用工具"].waitForExistence(timeout: 3))
+        let addPlugin = app.buttons["tools.favorite.add.plugins"]
+        scrollToMiddle(addPlugin, in: app); addPlugin.tap()
+        XCTAssertEqual(app.staticTexts["tools.favorites.count"].label, "5 / 6")
+        let removePlugin = app.buttons["tools.favorite.remove.plugins"]
+        scrollToMiddle(removePlugin, in: app); removePlugin.tap()
+        XCTAssertEqual(app.staticTexts["tools.favorites.count"].label, "4 / 6")
+        capture("ToolsCustomize", app: app)
+        app.buttons["tools.favorites.done"].tap()
+        let apps = app.buttons["tools.apps"]
+        scrollToMiddle(apps, in: app); apps.tap()
+        XCTAssertTrue(app.navigationBars["应用"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["deviceTools.app.com.utmapp.UTM"].waitForExistence(timeout: 5))
+    }
+
+    func testToolsLargeTextRemainsOperable() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        tapTab("工具", in: app)
+        let files = app.buttons["tools.localFiles"]
+        XCTAssertTrue(files.waitForExistence(timeout: 5))
+        capture("ToolsLargeText", app: app)
+        scrollToMiddle(files, in: app); files.tap()
+        XCTAssertTrue(app.navigationBars["本机文件"].waitForExistence(timeout: 5))
+    }
+
     func testStoreEntryAndLoginCancellation() {
         let app = XCUIApplication(); app.launch()
-        let entry = app.buttons["library.decryption"]
+        tapTab("工具", in: app)
+        let entry = app.buttons["tools.decryption"]
         XCTAssertTrue(entry.waitForExistence(timeout: 10)); entry.tap()
+        app.segmentedControls["decryption.source"].buttons["商店下载"].tap()
         let login = app.buttons["decryption.store.login"]
         XCTAssertTrue(login.waitForExistence(timeout: 5))
         XCTAssertTrue(app.textFields["decryption.store.searchField"].exists)
@@ -18,24 +356,98 @@ final class WorkspaceUITests: XCTestCase {
         app.buttons["取消"].tap()
         XCTAssertTrue(app.navigationBars["应用砸壳"].waitForExistence(timeout: 5))
         app.buttons["decryption.store.installed"].tap()
-        XCTAssertTrue(app.navigationBars["本机应用"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["本机已安装"].waitForExistence(timeout: 5))
         app.buttons["取消"].tap()
     }
     func testDecryptionEntryAndLocalFilePickerCancellation() {
         let app = XCUIApplication(); app.launch()
-        let entry = app.buttons["library.decryption"]
+        tapTab("工具", in: app)
+        let entry = app.buttons["tools.decryption"]
         XCTAssertTrue(entry.waitForExistence(timeout: 10)); entry.tap()
         XCTAssertTrue(app.navigationBars["应用砸壳"].waitForExistence(timeout: 5))
+        app.segmentedControls["decryption.source"].buttons["外部 IPA"].tap()
         let select = app.buttons["decryption.import"]
         XCTAssertTrue(select.exists); XCTAssertTrue(select.isEnabled)
         XCTAssertFalse(app.buttons["decryption.install"].exists)
+        let output = app.segmentedControls["decryption.output"]
+        XCTAssertTrue(output.exists)
+        output.buttons["证书签名安装"].tap()
+        XCTAssertTrue(output.buttons["证书签名安装"].isSelected)
+        output.buttons["导出助手 IPA"].tap()
+        XCTAssertTrue(output.buttons["导出助手 IPA"].isSelected)
         capture("DecryptionLocalImport", app: app)
         scrollToMiddle(select,in: app); select.tap()
         let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["取消","Cancel"])).firstMatch
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5)); cancel.tap()
+        XCTAssertTrue(cancel.waitForExistence(timeout: 20)); cancel.tap()
         XCTAssertTrue(select.waitForExistence(timeout: 5)); XCTAssertTrue(select.isEnabled)
     }
-    /// 二级页面会隐藏标签栏，返回后标签栏有出现动画；等它可点击后再点，避免点空。
+    func testInstalledDecryptionStartsWithApplicationSelectionAndExplainsReadFailure() {
+        let app = XCUIApplication(); app.launch()
+        tapTab("工具", in: app)
+        app.buttons["tools.decryption"].tap()
+        XCTAssertTrue(app.segmentedControls["decryption.source"].buttons["本机已安装"].isSelected)
+        let select = app.buttons["decryption.installed.select"]
+        XCTAssertTrue(select.waitForExistence(timeout: 5)); select.tap()
+        XCTAssertTrue(app.navigationBars["本机已安装"].waitForExistence(timeout: 5))
+        let installed = app.buttons["decryption.installed.app.com.apple.store.Jolly"]
+        XCTAssertTrue(installed.waitForExistence(timeout: 8)); capture("InstalledDecryptionApps", app: app); installed.tap()
+        let prepare = app.buttons["decryption.installed.prepare"]
+        XCTAssertTrue(prepare.waitForExistence(timeout: 5)); prepare.tap()
+        let issue = app.descendants(matching: .any)["decryption.sourceIssue"].firstMatch
+        XCTAssertTrue(issue.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "从商店获取原始包")).firstMatch.exists)
+        capture("InstalledDecryptionReadFailure", app: app)
+    }
+
+    func testEveryToolsSecondaryPageHasUsableEntry() {
+        let app = XCUIApplication(); app.launch()
+        tapTab("工具", in: app)
+        let pages = [("localFiles", "本机文件", "本机文件"), ("decryption", "应用砸壳", "应用砸壳"),
+                     ("plugins", "插件管理", "插件管理"), ("fileBackups", "文件备份", "文件备份"),
+                     ("apps", "设备应用", "应用"), ("profiles", "描述文件", "描述文件"),
+                     ("backups", "应用数据备份", "数据备份"), ("crashes", "崩溃日志", "崩溃日志"),
+                     ("logs", "实时日志", "实时日志"), ("deviceInfo", "设备信息", "设备信息"),
+                     ("connection", "配对与连接", "设备配对与连接"), ("device", "设备总览", "设备工具"),
+                     ("processes", "进程管理", "进程"), ("location", "定位模拟", "定位模拟"),
+                     ("runtime", "容器运行设置", "容器运行设置"), ("developerImage", "开发者镜像", "开发者镜像")]
+        for (id, term, title) in pages {
+            let search = app.textFields["tools.search"]
+            XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText(term)
+            let entry = app.buttons["tools." + id]
+            XCTAssertTrue(entry.waitForExistence(timeout: 3)); entry.tap()
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), id)
+            if id == "crashes" { XCTAssertFalse(app.switches["deviceTools.crash.filter"].value as? String == "1") }
+            if id == "logs" { XCTAssertTrue(app.buttons["deviceTools.logs.toggle"].exists) }
+            capture("Secondary-" + id, app: app)
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            let clear = app.buttons["tools.search.clear"]
+            XCTAssertTrue(clear.waitForExistence(timeout: 5)); clear.tap()
+        }
+    }
+
+    func testSecondaryPagesSupportAccessibilityText() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch(); tapTab("工具", in: app)
+        for (id, term, action) in [("decryption", "应用砸壳", "decryption.installed.select"),
+                                   ("localFiles", "本机文件", "localFiles.open"),
+                                   ("developerImage", "开发者镜像", "deviceTools.ddi.mount"),
+                                   ("location", "定位模拟", "location.simulate")] {
+            let search = app.textFields["tools.search"]
+            XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText(term + "\n")
+            let entry = app.buttons["tools." + id]
+            scrollTo(entry, in: app); entry.tap()
+            let control = app.buttons[action]
+            scrollTo(control, in: app)
+            XCTAssertTrue(control.waitForExistence(timeout: 5), id)
+            XCTAssertTrue(control.isHittable, id)
+            capture("SecondaryLargeText-" + id, app: app)
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            app.buttons["tools.search.clear"].tap()
+        }
+    }
+
+    /// 等待系统导航手势结束后再切换首页标签。
     private func tapTab(_ name: String, in app: XCUIApplication) {
         let tab = app.tabBars.buttons[name]
         let deadline = Date().addingTimeInterval(5)
@@ -57,9 +469,8 @@ final class WorkspaceUITests: XCTestCase {
     func testRespringConfirmationAndSimulatorExclusion() {
         let app = XCUIApplication(); app.launchArguments = ["-RetoolsRespringMethod", "webKit"]; app.launch()
         XCTAssertTrue(app.buttons["library.import"].waitForExistence(timeout: 10))
-        tapTab("设置", in: app)
-        app.swipeDown(); app.swipeDown()
-        let tools = app.buttons["settings.deviceTools"]
+        tapTab("工具", in: app)
+        let tools = app.buttons["tools.device"]
         scrollToMiddle(tools, in: app); tools.tap()
         XCTAssertTrue(app.navigationBars["设备工具"].waitForExistence(timeout: 5))
         let respring = app.buttons["deviceTools.respring"]
@@ -94,10 +505,8 @@ final class WorkspaceUITests: XCTestCase {
     }
     private func openUTMProcess(in app: XCUIApplication, rowTimeout: TimeInterval = 10) -> XCUIElement {
         XCTAssertTrue(app.buttons["library.import"].waitForExistence(timeout: 10))
-        tapTab("设置", in: app)
-        let tools = app.buttons["settings.deviceTools"]
-        scrollToMiddle(tools, in: app); tools.tap()
-        let processes = app.buttons["deviceTools.processes"]
+        tapTab("工具", in: app)
+        let processes = app.buttons["tools.processes"]
         scrollToMiddle(processes, in: app); processes.tap()
         let row = app.buttons["deviceTools.process.101"]
         XCTAssertTrue(row.waitForExistence(timeout: rowTimeout))
@@ -176,60 +585,43 @@ final class WorkspaceUITests: XCTestCase {
         XCTAssertFalse(app.buttons["准备 Apple ID 开发签名"].isEnabled)
         capture("DevelopmentSigningAppGroup", app: app)
     }
-    func testLocalFileSwitchUsesExistingAppFileBrowser() {
-        let app = XCUIApplication(); app.launch()
-        func reveal(_ item: XCUIElement) {
-            for _ in 0..<6 {
-                if item.exists, !item.frame.isEmpty, item.frame.minY > 100, item.frame.maxY < app.frame.height - 80 { return }
-                app.swipeUp()
-            }
-        }
-        func openTools() {
-            tapTab("设置", in: app)
-            let tools = app.buttons["settings.deviceTools"]
-            reveal(tools); tools.tap()
-            XCTAssertTrue(app.switches["deviceTools.localFiles"].waitForExistence(timeout: 5))
-        }
-        func openUTMFiles() {
-            let apps = app.buttons["deviceTools.apps"]
-            reveal(apps); apps.tap()
-            let utm = app.buttons["deviceTools.app.com.utmapp.UTM"]
-            XCTAssertTrue(utm.waitForExistence(timeout: 10)); reveal(utm); utm.tap()
-            XCTAssertFalse(app.buttons["本机读取应用文件（实验）"].exists)
-            let files = app.buttons["deviceTools.files"]
-            reveal(files); XCTAssertTrue(files.isEnabled); files.tap()
-        }
-        XCTAssertTrue(app.buttons["library.import"].waitForExistence(timeout: 10))
-        openTools()
-        let toggle = app.switches["deviceTools.localFiles"]
-        if toggle.value as? String == "1" { toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() }
-        capture("LocalFileSwitchOff", app: app)
-        openUTMFiles()
-        XCTAssertTrue(app.buttons["deviceTools.files.add"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Documents")).firstMatch.waitForExistence(timeout: 5))
-        capture("ExistingDeviceFileBrowser", app: app)
-        for _ in 0..<3 { app.navigationBars.buttons.element(boundBy: 0).tap() }
-        app.swipeDown()
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        XCTAssertEqual(toggle.value as? String, "1")
-        capture("LocalFileSwitchOn", app: app)
-        app.terminate(); app.launch()
-        openTools()
-        XCTAssertEqual(app.switches["deviceTools.localFiles"].value as? String, "1")
-        defer {
-            for _ in 0..<3 { app.navigationBars.buttons.element(boundBy: 0).tap() }
-            app.swipeDown()
-            let setting = app.switches["deviceTools.localFiles"]
-            if setting.exists, setting.value as? String == "1" { setting.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() }
-        }
-        openUTMFiles()
+    func testLocalFilesOpenWithoutPairingAndRemainSeparateFromDeviceFiles() {
+        let app = XCUIApplication()
+        // 已有旧开关设置不能再改变配对文件浏览器的读写方式。
+        app.launchArguments = ["-RetoolsLocalFileAccessEnabled", "YES"]
+        app.launch()
+        tapTab("工具", in: app)
+        capture("Tools", app: app)
+        app.buttons["tools.localFiles"].tap()
+        XCTAssertTrue(app.navigationBars["本机文件"].waitForExistence(timeout: 5))
+        let path = app.textFields["localFiles.path"].exists ? app.textFields["localFiles.path"] : app.textViews["localFiles.path"]
+        XCTAssertTrue(path.exists)
+        path.tap(); path.typeText("/var/mobile/Containers/Data/Application/11111111-1111-4111-8111-111111111111/Documents")
+        app.buttons["localFiles.open"].tap()
         let failure = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "deviceTools.files.failure", "模拟器")).firstMatch
         XCTAssertTrue(failure.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["本机访问 · 只读"].exists)
-        XCTAssertFalse(app.buttons["deviceTools.files.add"].exists)
-        XCTAssertFalse(app.textFields["localFiles.path"].exists)
-        capture("IntegratedLocalFileBrowser", app: app)
+        XCTAssertTrue(app.staticTexts["本机访问 · 读写"].exists)
+        XCTAssertTrue(app.buttons["deviceTools.files.add"].exists)
+        XCTAssertFalse(app.buttons["deviceTools.files.add"].isEnabled)
+        capture("LocalFileBrowser", app: app)
+        for _ in 0..<2 { app.navigationBars.buttons.element(boundBy: 0).tap() }
+        let device = app.buttons["tools.device"]
+        scrollToMiddle(device, in: app); device.tap()
+        XCTAssertFalse(app.switches["deviceTools.localFiles"].exists)
+        app.buttons["deviceTools.apps"].tap()
+        let utm = app.buttons["deviceTools.app.com.utmapp.UTM"]
+        XCTAssertTrue(utm.waitForExistence(timeout: 10)); utm.tap()
+        let files = app.buttons["deviceTools.files"]
+        scrollTo(files, in: app); XCTAssertTrue(files.isEnabled); files.tap()
+        XCTAssertTrue(app.buttons["deviceTools.files.add"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["本机访问 · 读写"].exists)
+    }
+
+    func testDecryptionDeepLinkOpensTools() {
+        let app = XCUIApplication(); app.launchArguments = ["--open-decryption"]; app.launch()
+        XCTAssertTrue(app.navigationBars["应用砸壳"].waitForExistence(timeout: 10))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.tabBars.buttons["工具"].isSelected)
     }
     func testLibraryDeletionFromContextAndProjectMenu() throws {
         let app = XCUIApplication(); app.launch()
@@ -383,8 +775,8 @@ final class WorkspaceUITests: XCTestCase {
     }
     func testPluginManagerOpensImporterAndCancels() {
         let app = XCUIApplication(); app.launch()
-        tapTab("设置", in: app)
-        app.buttons["settings.plugins"].tap()
+        tapTab("工具", in: app)
+        app.buttons["tools.plugins"].tap()
         XCTAssertTrue(app.navigationBars["插件管理"].waitForExistence(timeout: 3))
         app.buttons["plugins.import"].tap()
         let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "取消"])).firstMatch
@@ -437,11 +829,24 @@ final class WorkspaceUITests: XCTestCase {
         let app = XCUIApplication(); app.launch()
         app.buttons["library.import"].tap()
         let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "取消"])).firstMatch
-        XCTAssertTrue(cancel.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(cancel.waitForExistence(timeout: 45), app.debugDescription)
         let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways
         add(screenshot)
         cancel.tap()
         XCTAssertTrue(app.buttons["library.import"].waitForExistence(timeout: 3))
+    }
+    func testSharedIPAOpensLibraryWithoutOtherDocumentHandlers() throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "Fixture", withExtension: "ipa"))
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("Shared-" + UUID().uuidString + ".ipa")
+        try FileManager.default.copyItem(at: fixture, to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let original = try Data(contentsOf: file)
+        let app = XCUIApplication()
+        app.launchArguments = ["-RetoolsFloatingControlsEnabled", "NO"]
+        app.open(file)
+        XCTAssertTrue(app.staticTexts["测试应用"].firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        capture("SharedIPAImported", app: app)
     }
     func testSigningProjectEditingPersistenceAndWorkspaceBrowser() throws {
         let app = XCUIApplication(); app.launch()

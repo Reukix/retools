@@ -31,7 +31,7 @@ struct SigningProjectFieldEditor: View {
                     else { TextField(field.title, text: $text).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("project.editor.value") }
                 } footer: { Text(field == .minimum ? "留空保留原版本。修改声明不能使应用兼容其依赖的新系统 API。" : "留空使用原始值或自动生成的文件名。") }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
-            }.navigationTitle(field.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            }.navigationTitle(field.title).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button("保存") { do { try save(field == .note ? text : text.trimmingCharacters(in: .whitespacesAndNewlines)); dismiss() } catch { self.error = error.localizedDescription } }.accessibilityIdentifier("project.editor.save") }
@@ -49,10 +49,10 @@ struct SigningEntitlementsEditor: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
-                Text("导入的条目会覆盖描述文件中的对应权限。应用、团队身份及授权范围会在签名前校验。").font(.footnote).foregroundStyle(.secondary)
+                Text("导入的条目会覆盖描述文件中的对应权限。应用、团队身份及授权范围会在签名前校验。").font(.footnote).foregroundStyle(Color.secondary)
                 TextEditor(text: $text).font(.system(.caption, design: .monospaced)).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("project.entitlements.editor")
                 if let error { Text(error).font(.footnote).foregroundStyle(.red) }
-            }.padding().navigationTitle("Entitlements").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            }.padding().navigationTitle("Entitlements").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button("保存") {
@@ -86,10 +86,10 @@ struct SigningProjectBrowser: View {
                 else {
                     VStack(spacing: 14) {
                         ProgressView("正在准备工作区…")
-                        Text("正在解压应用并应用当前配置，可随时关闭此页面。").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        Text("正在解压应用并应用当前配置，可随时关闭此页面。").font(.footnote).foregroundStyle(Color.secondary).multilineTextAlignment(.center)
                     }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityIdentifier("project.files.loading")
                 }
-            }.navigationTitle("工作区文件").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            }.navigationTitle("工作区文件").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.accessibilityIdentifier("project.files.close") } }
         }.task(id: attempt) {
                     error = nil
@@ -135,21 +135,21 @@ struct SigningProjectDependenciesView: View {
                     List {
                         Section {
                             Text(inspection.executable).font(.system(.subheadline, design: .monospaced))
-                            Text("\(dependencies.count) 条依赖项").font(.subheadline).foregroundStyle(.secondary).accessibilityIdentifier("project.dependencies.summary")
+                            Text("\(dependencies.count) 条依赖项").font(.subheadline).foregroundStyle(Color.secondary).accessibilityIdentifier("project.dependencies.summary")
                         } header: { Text("主程序") } footer: { Text("包括原始主程序依赖和当前配置将注入的库。") }
                         Section {
                             ForEach(dependencies) { dependency in
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(dependency.path).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                                    if dependency.isWeak { Text("弱链接").font(.caption2).foregroundStyle(.secondary) }
+                                    if dependency.isWeak { Text("弱链接").font(.caption2).foregroundStyle(Color.secondary) }
                                 }.padding(.vertical, 4)
                             }
-                            if dependencies.isEmpty { Text("主程序未声明动态库依赖。").foregroundStyle(.secondary) }
+                            if dependencies.isEmpty { Text("主程序未声明动态库依赖。").foregroundStyle(Color.secondary) }
                         } header: { Text("动态库") }
                     }
                 } else if let error { SigningProjectReadError(message: error) { attempt += 1 } }
                 else { ProgressView("正在读取主程序依赖…").frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityIdentifier("project.dependencies.loading") }
-            }.navigationTitle("主二进制依赖").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+            }.navigationTitle("主二进制依赖").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.accessibilityIdentifier("project.dependencies.close") } }
         }.task(id: attempt) {
                     error = nil
@@ -192,16 +192,16 @@ private struct SigningProjectDirectory: View {
     @State private var error: String?
     var body: some View {
         List {
-            if directory == root { Section { Text("当前配置的工作副本。重新签名会从原始 IPA 生成新的副本。").font(.footnote).foregroundStyle(.secondary) } }
+            if directory == root { Section { Text("当前配置的工作副本。重新签名会从原始 IPA 生成新的副本。").font(.footnote).foregroundStyle(Color.secondary) } }
             if let error { Text(error).foregroundStyle(.red) }
             ForEach(files, id: \.path) { file in
                 if (try? file.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-                    NavigationLink { SigningProjectDirectory(directory: file, root: root) } label: { Label(file.lastPathComponent, systemImage: "folder") }
+                    NavigationLink { SigningProjectDirectory(directory: file, root: root) } label: { Label(file.lastPathComponent, systemImage: "folder").foregroundStyle(Color.primary) }
                 } else {
-                    NavigationLink { SigningProjectFile(file: file) } label: { Label(file.lastPathComponent, systemImage: "doc") }
+                    NavigationLink { SigningProjectFile(file: file) } label: { Label(file.lastPathComponent, systemImage: "doc").foregroundStyle(Color.primary) }
                 }
             }
-        }.navigationTitle(title ?? directory.lastPathComponent).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        }.navigationTitle(title ?? directory.lastPathComponent).navigationBarTitleDisplayMode(.inline)
             .task {
                 do {
                     files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]).filter {
@@ -219,9 +219,9 @@ private struct SigningProjectFile: View {
             VStack(alignment: .leading, spacing: 20) {
                 ShareLink(item: file) { Label("导出文件", systemImage: "square.and.arrow.up") }
                 if let text { Text(text).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-                else { Text("此文件可通过共享菜单导出查看。").foregroundStyle(.secondary) }
+                else { Text("此文件可通过共享菜单导出查看。").foregroundStyle(Color.secondary) }
             }.padding()
-        }.navigationTitle(file.lastPathComponent).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        }.navigationTitle(file.lastPathComponent).navigationBarTitleDisplayMode(.inline)
             .task {
                 guard ["plist", "strings", "xml", "json", "txt", "md"].contains(file.pathExtension.lowercased()),
                       let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 262144,

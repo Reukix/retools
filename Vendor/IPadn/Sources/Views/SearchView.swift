@@ -1,0 +1,219 @@
+import SwiftUI
+
+/// App Store-style search: title with the account avatar on one line, a
+/// capsule search bar under it, filter chips, recent
+/// searches as suggestions, and result rows with a "获取" capsule.
+struct SearchView: View {
+    @EnvironmentObject private var store: ToolStore
+    @EnvironmentObject private var apple: AppleService
+    @EnvironmentObject private var downloads: DownloadManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var confirmClear = false
+    @State private var getting: StoreApp?
+    @State private var viewingFavorite: StoreApp?
+    @State private var headerAway = false
+    private static let regions = [("CN", "中国大陆"), ("US", "美国"), ("HK", "香港"), ("TW", "台湾"), ("JP", "日本"), ("GB", "英国"), ("SG", "新加坡"), ("CA", "加拿大"), ("AU", "澳大利亚"), ("KR", "韩国"), ("DE", "德国"), ("FR", "法国")]
+    var body: some View {
+        List {
+            Section {
+                StoreOverviewCard(title: "查找应用与版本", detail: "搜索应用、切换商店地区，获取需要的版本。", symbol: "bag.fill", metrics: [
+                    StoreMetric(title: "关注应用", value: "\(store.favorites.count)"),
+                    StoreMetric(title: "下载记录", value: "\(downloads.jobs.count)"),
+                    StoreMetric(title: "当前商店", value: store.settings.store.country)
+                ]).storeOverviewRow()
+            }
+            Section {
+                SearchInput(text: $store.searchText, placeholder: "应用名称、App ID 或链接", capsule: true,
+                            submit: { store.search() }, clear: { store.clearSearch() })
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) { regionPicker; platformPicker }
+                }
+                .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 8, trailing: 0))
+            }
+            .listRowBackground(Color.clear).listRowSeparator(.hidden)
+
+            // Placeholders where the results will appear, so they replace the
+            // loading rows instead of pushing everything down.
+            if store.searching {
+                Section {
+                    HStack { ProgressView(); Text("正在搜索…").font(.subheadline).foregroundStyle(Color.secondary); Spacer(); Button("取消") { store.cancelSearch() } }
+                    if store.results.isEmpty { AppSkeleton(); AppSkeleton() }
+                }
+            }
+            if let error = store.searchError {
+                Section { InlineIssue(message: error) { store.search(store.lastSearchTerm) } }
+            }
+            if !store.results.isEmpty {
+                Section {
+                    ForEach(store.results) { app in resultRow(app, note: app.tvOSCandidate == true ? "可能支持 Apple TV" : nil) }
+                } header: { Text("\(store.results.count) 个结果") }
+            }
+            if !store.localResults.isEmpty {
+                Section {
+                    ForEach(store.localResults) { app in resultRow(app, note: nil) }
+                } header: { Text("更多结果") }
+            }
+            if store.results.isEmpty && store.localResults.isEmpty && store.hasSearched && !store.searching && store.searchError == nil {
+                Section {
+                    EmptyState(title: "无结果", message: "“\(store.lastSearchTerm)”没有匹配的应用。试试 App ID、App Store 链接或其他地区。",
+                               symbol: "magnifyingglass", actionTitle: "清除搜索", action: { store.clearSearch() })
+                }.listRowBackground(Color.clear)
+            }
+            if !store.hasSearched && !store.searching {
+                suggestions
+            }
+        }
+        .animation(UX.motion(reduceMotion), value: store.searchHistory.map(\.id))
+        .animation(UX.motion(reduceMotion), value: store.favorites.map(\.id))
+        .toolPage()
+        .rootTabBar("商店下载", headerScrolledAway: false)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { AccountMenuButton() } }
+        .storeNavigationDestination(item: $getting) { app in AppDetailView(app: app, autoStart: true) }
+        .storeNavigationDestination(item: $viewingFavorite) { app in AppDetailView(app: app) }
+        .actionConfirmation(isPresented: $confirmClear, title: "清除最近搜索？", confirmTitle: "清除") { withAnimation { store.clearHistory() } }
+        .task { await store.loadNameCatalog() }
+        .task { await store.checkWatched() }
+        .task(id: apple.activeID) { await store.ensureOwnedLoaded() }
+    }
+
+    private func resultRow(_ app: StoreApp, note: String?) -> some View {
+        StoreNavigationLink { AppDetailView(app: app) } label: {
+            AppRow(app: app, subtitle: note.map { [app.displayCategory, $0].filter { !$0.isEmpty }.joined(separator: " · ") }) {
+                RowCapsule(title: "获取") { getting = app; UX.feedback() }
+                    .accessibilityLabel("获取 \(app.name)")
+            }
+        }
+        .contextMenu {
+            Button(store.isFavorite(app) ? "取消关注" : "关注", systemImage: store.isFavorite(app) ? "bell.slash" : "bell") {
+                store.toggleFavorite(app); UX.feedback()
+            }
+        }
+    }
+
+    @ViewBuilder private var suggestions: some View {
+        if store.searchHistory.isEmpty && store.favorites.isEmpty {
+            Section {
+                Label("输入应用名称、App ID 或 App Store 链接开始搜索。", systemImage: "magnifyingglass")
+                    .font(.subheadline).foregroundStyle(Color.secondary).padding(.vertical, 10)
+            }.listRowBackground(UX.surface)
+        }
+        if !store.searchHistory.isEmpty {
+            Section {
+                ForEach(Array(store.searchHistory.prefix(8))) { item in
+                    Button { store.search(item.term) } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(Color.secondary)
+                            Text(item.term).foregroundStyle(Color.primary).lineLimit(1)
+                            Spacer()
+                            Image(systemName: "arrow.up.left").font(.caption).foregroundStyle(Color.secondary)
+                        }.frame(minHeight: 30).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("history.\(item.id)")
+                    .revealDelete(id: "history." + item.id, style: .compact) { withAnimation { store.removeHistory(item.term) } }
+                }
+            } header: {
+                HStack {
+                    Text("最近搜索").foregroundStyle(Color.secondary)
+                    Spacer()
+                    Button("清除") { confirmClear = true }.font(.subheadline).foregroundStyle(Color.secondary).textCase(nil)
+                }
+            }
+        }
+        if !store.favorites.isEmpty {
+            Section {
+                ForEach(store.favorites) { app in
+                    Button { viewingFavorite = app } label: {
+                        HStack {
+                            WatchRow(app: app)
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Color(uiColor: .tertiaryLabel))
+                        }.contentShape(Rectangle())
+                    }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("favorite." + app.id)
+                        .revealDelete(id: "favorite." + app.id, title: "取消关注") { withAnimation { store.toggleFavorite(app) } }
+                }
+            } header: {
+                HStack {
+                    Text("关注").font(.title3.weight(.bold)).foregroundStyle(Color.primary).textCase(nil)
+                    Spacer()
+                    if store.watchChecking { ProgressView().controlSize(.small) }
+                }
+            }
+        }
+    }
+
+    private func chip(_ title: String, symbol: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol).font(.caption.weight(.semibold))
+            Text(title).font(.subheadline.weight(.medium))
+            Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+        }
+        .foregroundStyle(Color.primary)
+        .padding(.horizontal, 12).frame(minHeight: 32)
+        .background(UX.surface, in: Capsule())
+        .overlay(Capsule().strokeBorder(UX.border))
+    }
+    private var regionPicker: some View {
+        Menu {
+            Picker("商店地区", selection: $store.settings.store.country) {
+                ForEach(Self.regions, id: \.0) { code, label in Text(label).tag(code) }
+            }
+        } label: { chip(Self.regions.first { $0.0 == store.settings.store.country }?.1 ?? store.settings.store.country, symbol: "globe") }
+        .accessibilityLabel("商店地区")
+    }
+    private var platformPicker: some View {
+        Menu {
+            Picker("应用平台", selection: $store.settings.store.platform) {
+                ForEach(AppPlatform.allCases) { platform in Label(platform.title, systemImage: platform.symbol).tag(platform) }
+            }
+        } label: { chip(store.settings.store.platform.title, symbol: store.settings.store.platform.symbol) }
+        .accessibilityLabel("应用平台：\(store.settings.store.platform.title)")
+    }
+}
+
+/// App Store's top-right account button: avatar with a quick account switcher.
+struct AccountMenuButton: View {
+    @EnvironmentObject private var store: ToolStore
+    @EnvironmentObject private var apple: AppleService
+    var body: some View {
+        Menu {
+            if !apple.accounts.isEmpty {
+                Section("切换账号") {
+                    ForEach(apple.accounts) { account in
+                        Button { apple.select(account.id); UX.feedback() } label: {
+                            Label(account.id, systemImage: account.id == apple.activeID ? "checkmark.circle.fill" : "person.crop.circle")
+                        }
+                    }
+                }
+            }
+            Button("账号与设置", systemImage: "person.crop.circle") { store.tab = 3 }
+        } label: {
+            AccountAvatar(account: apple.active, size: 32).frame(minWidth: 44, minHeight: 44)
+        }
+        .accessibilityLabel("切换或管理账号")
+    }
+}
+
+struct AccountAvatar: View {
+    let account: AppleAccount?
+    var size: CGFloat = 32
+    private var initials: String {
+        guard let account else { return "" }
+        let source = account.name.isEmpty ? account.id : account.name
+        return String(source.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
+    }
+    var body: some View {
+        ZStack {
+            Circle().fill(account == nil ? AnyShapeStyle(Color.primary.opacity(0.06)) : AnyShapeStyle(UX.accentGradient))
+            if account == nil {
+                Image(systemName: "person.fill").font(.system(size: size * 0.5)).foregroundStyle(UX.accent)
+            } else {
+                Text(initials).font(.system(size: size * 0.45, weight: .semibold, design: .rounded)).foregroundStyle(.white)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}

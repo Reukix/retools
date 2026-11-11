@@ -9,6 +9,8 @@ enum Palette {
     static let surface = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.12, green: 0.13, blue: 0.14, alpha: 1) : .white })
     static let ink = Color.primary
     static let muted = Color.secondary
+    // Explicit text colors keep informational labels neutral inside tinted controls.
+    static let tertiaryText = Color(uiColor: .tertiaryLabel)
     static let border = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.08) : UIColor(white: 0, alpha: 0.05) })
     static let shadow = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .clear : UIColor(red: 0.45, green: 0.25, blue: 0.1, alpha: 0.08) })
     static let dark = Color(red: 0.13, green: 0.15, blue: 0.16)
@@ -28,7 +30,12 @@ struct AmbientBackground: View {
 }
 
 extension View {
-    func ambientBackground() -> some View { background(AmbientBackground()) }
+    func ambientBackground() -> some View {
+        background(AmbientBackground()).workbenchNavigation()
+    }
+    func workbenchNavigation() -> some View {
+        background(WorkspaceNavigationPolicy().frame(width: 0, height: 0))
+    }
 }
 
 struct CardModifier: ViewModifier {
@@ -94,10 +101,10 @@ struct ScreenHeader: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 7) {
                 RoundedRectangle(cornerRadius: 2).fill(Palette.accent).frame(width: 6, height: 6)
-                Text(eyebrow).font(.system(size: 10, weight: .bold, design: .monospaced)).tracking(2).foregroundStyle(.secondary)
+                Text(eyebrow).font(.system(size: 10, weight: .bold, design: .monospaced)).tracking(2).foregroundStyle(Color.secondary)
             }
-            Text(title).font(.system(size: 32, weight: .bold, design: .rounded)).tracking(-0.8)
-            Text(subtitle).font(.system(size: 14)).foregroundStyle(.secondary)
+            Text(title).font(.system(size: 32, weight: .bold, design: .rounded)).tracking(-0.8).foregroundStyle(Color.primary)
+            Text(subtitle).font(.system(size: 14)).foregroundStyle(Color.secondary)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -107,9 +114,9 @@ struct SectionHeading: View {
     var trailing: String? = nil
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(title).font(.title3.weight(.bold))
+            Text(title).font(.title3.weight(.bold)).foregroundStyle(Color.primary)
             Spacer()
-            if let trailing { Text(trailing).font(.footnote.monospacedDigit()).foregroundStyle(.secondary) }
+            if let trailing { Text(trailing).font(.footnote.monospacedDigit()).foregroundStyle(Color.secondary) }
         }
     }
 }
@@ -137,8 +144,8 @@ struct StatTile: View {
             Image(systemName: symbol).font(.system(size: 14, weight: .semibold)).foregroundStyle(color)
                 .frame(width: 30, height: 30).background(color.opacity(0.13), in: Circle())
             VStack(alignment: .leading, spacing: 2) {
-                Text(value).font(.system(.title2, design: .rounded).weight(.bold)).monospacedDigit().contentTransition(.numericText())
-                Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(value).font(.system(.title2, design: .rounded).weight(.bold)).monospacedDigit().contentTransition(.numericText()).foregroundStyle(Color.primary)
+                Text(title).font(.caption).foregroundStyle(Color.secondary).lineLimit(1)
             }
         }.frame(maxWidth: .infinity, alignment: .leading).workspaceCard(padding: 14)
             .accessibilityElement(children: .combine)
@@ -211,7 +218,7 @@ struct EmptyState<Actions: View>: View {
         VStack(spacing: 14) {
             GlyphTile(symbol: symbol).padding(.bottom, 8)
             Text(title).font(.title3.weight(.bold))
-            Text(detail).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).lineSpacing(4).frame(maxWidth: 300)
+            Text(detail).font(.subheadline).foregroundStyle(Color.secondary).multilineTextAlignment(.center).lineSpacing(4).frame(maxWidth: 300)
             actions().padding(.top, 6)
         }.frame(maxWidth: .infinity).padding(.vertical, 36)
     }
@@ -227,9 +234,9 @@ struct InfoRow: View {
     let value: String
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(title).foregroundStyle(.secondary)
+            Text(title).foregroundStyle(Color.secondary)
             Spacer(minLength: 24)
-            Text(value).multilineTextAlignment(.trailing).textSelection(.enabled)
+            Text(value).multilineTextAlignment(.trailing).textSelection(.enabled).foregroundStyle(Color.primary)
         }.font(.subheadline).padding(.vertical, 5)
     }
 }
@@ -244,7 +251,7 @@ struct HelpStep: View {
                 .frame(width: 29, height: 29).background(Palette.accent.opacity(0.08), in: Circle())
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.subheadline.weight(.semibold))
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineSpacing(3)
+                Text(detail).font(.caption).foregroundStyle(Color.secondary).lineSpacing(3)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }

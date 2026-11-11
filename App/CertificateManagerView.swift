@@ -30,10 +30,10 @@ struct CertificateManagerView: View {
                                 HStack(spacing: 12) {
                                     Image(systemName: store.state.activeIdentityID == identity.id ? "checkmark.circle.fill" : "circle").foregroundStyle(store.state.activeIdentityID == identity.id ? Palette.accent : .secondary)
                                     VStack(alignment: .leading, spacing: 5) {
-                                        Text(identity.profileName).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
-                                        Text("\(identity.teamID) · \(identity.isExpired ? "已过期" : "剩余 \(identity.daysRemaining) 天")").font(.caption).foregroundStyle(.secondary)
-                                        Text(identity.applicationIdentifier).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                                        Text("指纹 \(identity.fingerprint.prefix(12).uppercased())").font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
+                                        Text(identity.profileName).font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary).lineLimit(2)
+                                        Text("\(identity.teamID) · \(identity.isExpired ? "已过期" : "剩余 \(identity.daysRemaining) 天")").font(.caption).foregroundStyle(Color.secondary)
+                                        Text(identity.applicationIdentifier).font(.system(size: 10, design: .monospaced)).foregroundStyle(Color.secondary).lineLimit(1).truncationMode(.middle)
+                                        Text("指纹 \(identity.fingerprint.prefix(12).uppercased())").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.tertiaryText)
                                     }
                                     Spacer(minLength: 0)
                                 }.contentShape(Rectangle())
@@ -45,7 +45,7 @@ struct CertificateManagerView: View {
                 } header: { Text("签名配置") } footer: { Text("选择默认签名证书；各应用仍可在签名配置中单独选择。") }
             }
         }.scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle("证书管理").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .navigationTitle("证书管理").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { showImport = true } label: { Image(systemName: "plus") }.accessibilityLabel("导入签名证书").accessibilityIdentifier("certificates.import") } }
             .sheet(isPresented: $showImport) { IdentityImportSheet() }
             .navigationDestination(item: $permissionsIdentity) { CertificatePermissionsView(identity: $0) }
@@ -75,8 +75,8 @@ struct IdentityImportSheet: View {
                     fileButton("描述文件", value: profile?.lastPathComponent, symbol: "doc.badge.gearshape") { importP12 = false; showPicker = true }
                 } header: { Text("Mobileprovision") } footer: { Text("将自动核对证书、团队、有效期以及描述文件中的开发者证书。") }
                 Section {
-                    Label("密码保存在此设备的钥匙串中", systemImage: "lock.shield").font(.system(size: 13)).foregroundStyle(.secondary)
-                    Text("容器运行请使用为 Retools 签名的同一份证书，并在设置中完成 JIT-less 检测。").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Label("密码保存在此设备的钥匙串中", systemImage: "lock.shield").font(.system(size: 13)).foregroundStyle(Color.secondary)
+                    Text("容器运行请使用为 Retools 签名的同一份证书，并在设置中完成 JIT-less 检测。").font(.system(size: 13)).foregroundStyle(Color.secondary)
                 }
                 Section {
                     Button("校验并保存") {
@@ -85,7 +85,7 @@ struct IdentityImportSheet: View {
                     }.disabled(p12 == nil || profile == nil || store.isWorking).fontWeight(.semibold).accessibilityIdentifier("identity.save")
                 }
             }.scrollContentBackground(.hidden).ambientBackground()
-                .navigationTitle("导入签名证书").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+                .navigationTitle("导入签名证书").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
                 .sheet(isPresented: $showPicker) {
                     DocumentImportPicker(isPresented: $showPicker) { result in
@@ -99,8 +99,8 @@ struct IdentityImportSheet: View {
             HStack {
                 Image(systemName: symbol).frame(width: 24)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title).foregroundStyle(.primary)
-                    Text(value ?? "从文件中选择").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(title).foregroundStyle(Color.primary)
+                    Text(value ?? "从文件中选择").font(.system(size: 12)).foregroundStyle(Color.secondary).lineLimit(1)
                 }
                 Spacer()
                 Image(systemName: value == nil ? "plus.circle" : "checkmark.circle.fill")

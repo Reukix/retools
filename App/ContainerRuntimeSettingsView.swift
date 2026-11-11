@@ -23,14 +23,28 @@ struct ContainerRuntimeSettingsView: View {
     }
     var body: some View {
         Form {
+            ToolPageIntro(tool: .runtime, title: "容器运行准备", detail: "检查当前运行方式，再配置签名证书与 JIT 来源。")
+            Section {
+                LabeledContent("当前状态", value: store.runtimeStatusTitle).accessibilityIdentifier("runtime.status")
+                Button { store.diagnose(presentError: false) } label: { ToolActionLabel(title: checkTitle, symbol: "checkmark.circle") }
+                    .disabled(store.isWorking || renewal.isWorking).accessibilityIdentifier("runtime.check")
+                if store.isCheckingRuntime { HStack { ProgressView(); Text(store.workLabel).font(.footnote) } }
+                if let issue = store.runtimeIssue {
+                    Label { Text(issue).textSelection(.enabled) } icon: { Image(systemName: "exclamationmark.circle") }
+                        .font(.footnote).foregroundStyle(.orange).accessibilityIdentifier("runtime.error")
+                }
+                NavigationLink { AuthDiagnosticView() } label: { Label("运行诊断记录", systemImage: "doc.text.magnifyingglass") }
+            } header: { Text(store.containerMode == .jitless ? "签名加载检测" : "JIT 启用") } footer: {
+                Text(store.containerMode == .jitless ? "检测结果会保存；更换证书、证书过期或 Retools 重签后，运行前会自动重新检测。" : "以当前进程的实际 JIT 状态为准。")
+            }
             Section {
                 Picker("运行模式", selection: $store.containerMode) {
                     ForEach(ContainerExecutionMode.allCases) { Text($0.title).tag($0) }
                 }.pickerStyle(.segmented).accessibilityIdentifier("runtime.mode")
                 if store.containerMode == .jitless {
-                    Text("用证书签名后运行，无需调试器。").font(.footnote).foregroundStyle(.secondary)
+                    Text("用证书签名后运行，无需调试器。").font(.footnote).foregroundStyle(Color.secondary)
                 } else {
-                    Text(WorkspaceService.jitRequiresSignedGuest ? "为新进程启用 JIT；应用仍会先用容器证书签名。" : "每次运行容器都会为新进程启用 JIT。").font(.footnote).foregroundStyle(.secondary)
+                    Text(WorkspaceService.jitRequiresSignedGuest ? "为新进程启用 JIT；应用仍会先用容器证书签名。" : "每次运行容器都会为新进程启用 JIT。").font(.footnote).foregroundStyle(Color.secondary)
                 }
             } header: { Text("运行模式") }
 
@@ -45,28 +59,15 @@ struct ContainerRuntimeSettingsView: View {
                         NavigationLink { DeviceConnectionView() } label: {
                             LabeledContent("设备配对与连接", value: renewal.connectionSummary)
                         }.accessibilityIdentifier("runtime.connection")
-                        Text(renewal.deviceConnectionStatus).font(.footnote).foregroundStyle(.secondary)
+                        Text(renewal.deviceConnectionStatus).font(.footnote).foregroundStyle(Color.secondary)
                     } else {
-                        Text("在外部工具中启用 JIT 后回到这里检查；每次运行容器需重新启用。").font(.footnote).foregroundStyle(.secondary)
+                        Text("在外部工具中启用 JIT 后回到这里检查；每次运行容器需重新启用。").font(.footnote).foregroundStyle(Color.secondary)
                     }
                 } header: { Text("JIT 连接") } footer: {
                     if jitProvider == "loopback" { Text("需保持外部代理回环连接。") }
                 }
             }
 
-            Section {
-                LabeledContent("当前状态", value: store.runtimeStatusTitle).accessibilityIdentifier("runtime.status")
-                Button(checkTitle) { store.diagnose(presentError: false) }
-                    .disabled(store.isWorking || renewal.isWorking).accessibilityIdentifier("runtime.check")
-                if store.isCheckingRuntime { HStack { ProgressView(); Text(store.workLabel).font(.footnote) } }
-                if let issue = store.runtimeIssue {
-                    Label { Text(issue).textSelection(.enabled) } icon: { Image(systemName: "exclamationmark.circle") }
-                        .font(.footnote).foregroundStyle(.orange).accessibilityIdentifier("runtime.error")
-                }
-                NavigationLink { AuthDiagnosticView() } label: { Label("运行诊断记录", systemImage: "doc.text.magnifyingglass") }
-            } header: { Text(store.containerMode == .jitless ? "签名加载检测" : "JIT 启用") } footer: {
-                Text(store.containerMode == .jitless ? "检测结果会保存；更换证书、证书过期或 Retools 重签后，运行前会自动重新检测。" : "以当前进程的实际 JIT 状态为准。")
-            }
             if store.containerMode == .jit, WorkspaceService.jitRequiresSignedGuest { signingSection }
 
             Section {
@@ -86,8 +87,8 @@ struct ContainerRuntimeSettingsView: View {
                 }
             } header: { Text("宿主环境") }
         }
-        .scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle("容器运行设置").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .toolListStyle()
+        .navigationTitle("容器运行设置").navigationBarTitleDisplayMode(.inline)
         .disabled(store.isWorking || renewal.isWorking)
         .onChange(of: jitProvider) { _, _ in store.invalidateRuntimeCheck() }
         .task { store.checkRuntimeIfNeeded() }

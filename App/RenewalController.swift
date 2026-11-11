@@ -1,3 +1,4 @@
+import IPadnKit
 import UserNotifications
 import SwiftUI
 import BackgroundTasks
@@ -896,6 +897,10 @@ final class RetoolsAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificat
     }
     /// AI 图像请求在后台完成时，系统唤醒应用并交来这个回调：先加载对话再接收结果，写回后才通知系统挂起。
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        if identifier == StoreBrowserRuntime.backgroundSessionIdentifier {
+            Task { @MainActor in StoreBrowserRuntime.handleBackgroundEvents(completion: completionHandler) }
+            return
+        }
         guard identifier == AIBackgroundImageTransfer.identifier else { completionHandler(); return }
         Task { @MainActor in
             _ = AIChatStore.shared
@@ -905,6 +910,7 @@ final class RetoolsAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificat
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         // 重新连上系统中仍在进行的 AI 图像后台任务。
         AIBackgroundImageTransfer.shared.reconnect()
+        StoreBrowserRuntime.registerBackgroundChecks()
         UNUserNotificationCenter.current().delegate = self
         BGTaskScheduler.shared.register(forTaskWithIdentifier: RenewalController.taskID, using: .main) { task in
             let operation = Task { @MainActor in

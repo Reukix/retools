@@ -5,6 +5,8 @@
 #import <TargetConditionals.h>
 #import <dlfcn.h>
 
+NSNumber *LCGetDefaultClassicMode(NSURL *appURL);
+
 static BOOL fail(NSError **error, NSString *message) {
     if (error) *error = [NSError errorWithDomain:@"Retools" code:1 userInfo:@{NSLocalizedDescriptionKey:message}];
     return NO;
@@ -15,20 +17,53 @@ static BOOL fail(NSError **error, NSString *message) {
     return [host.infoDictionary[@"RetoolsPrivateSandbox"] boolValue] && LCSharedUtils.appGroupPath == nil && NSUserDefaults.lcSharedDefaults == NSUserDefaults.standardUserDefaults;
 }
 + (BOOL)prepareContainer:(NSString *)path error:(NSError **)error {
-    NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Info.plist"]];
-    NSString *name = info[@"CFBundleExecutable"];
-    if (!name.length || ![name isEqualToString:name.lastPathComponent]) return fail(error, @"应用缺少有效的可执行文件。");
-    NSString *exec = [path stringByAppendingPathComponent:name];
-    __block BOOL encrypted = NO, arm64 = NO;
-    NSString *issue = LCParseMachO(exec.UTF8String, false, ^(const char *file, struct mach_header_64 *header, int fd, void *base) {
-        encrypted |= LCIsMachOEncrypted(header);
-        if (header->cputype == CPU_TYPE_ARM64) { arm64 = YES; if (!encrypted) LCPatchExecSlice(file, header, false); }
-    });
-    if (issue) return fail(error, issue);
-    if (encrypted) return fail(error, @"这个 IPA 的可执行文件已加密，无法用于容器。");
-    if (!arm64) return fail(error, @"容器目前需要包含 arm64 可执行文件的 iOS 应用。");
+    if (![self configureContainer:path injectTweakLoader:NO error:error]) return NO;
     LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:path]);
     return YES;
+}
++ (NSDictionary<NSString *, NSNumber *> *)configureContainer:(NSString *)path injectTweakLoader:(BOOL)inject error:(NSError **)error {
+    NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Info.plist"]];
+    NSString *name = info[@"CFBundleExecutable"];
+    if (!name.length || ![name isEqualToString:name.lastPathComponent]) { fail(error, @"应用缺少有效的可执行文件。"); return nil; }
+    NSString *exec = [path stringByAppendingPathComponent:name];
+    // Patch an unregistered inode, as the signing path does. Reusing a guest
+    // vnode with cached signature pages can terminate the host during mmap.
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *fresh = [[exec stringByDeletingLastPathComponent] stringByAppendingPathComponent:[@".retools-patch-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    if (![fm copyItemAtPath:exec toPath:fresh error:error]) return nil;
+    __block BOOL encrypted = NO, arm64 = NO;
+    __block int patchResult = 0;
+    NSString *issue = LCParseMachO(fresh.UTF8String, false, ^(const char *file, struct mach_header_64 *header, int fd, void *base) {
+        encrypted |= LCIsMachOEncrypted(header);
+        if (header->cputype == CPU_TYPE_ARM64) { arm64 = YES; if (!encrypted) patchResult |= LCPatchExecSlice(exec.UTF8String, header, inject); }
+    });
+    if (!issue && encrypted) issue = @"这个 IPA 的可执行文件已加密，无法用于容器。";
+    if (!issue && !arm64) issue = @"容器目前需要包含 arm64 可执行文件的 iOS 应用。";
+    if (!issue && inject && (patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER)) issue = @"主程序没有足够的加载命令空间，请将 TweakLoader 改为延后加载修复组件。";
+    if (issue) {
+        [fm removeItemAtPath:fresh error:nil];
+        fail(error, issue); return nil;
+    }
+    NSString *replacement = [fresh stringByAppendingString:@".ready"];
+    BOOL replaced = [fm copyItemAtPath:fresh toPath:replacement error:error] &&
+        [fm replaceItemAtURL:[NSURL fileURLWithPath:exec] withItemAtURL:[NSURL fileURLWithPath:replacement]
+             backupItemName:nil options:0 resultingItemURL:nil error:error];
+    [fm removeItemAtPath:fresh error:nil];
+    [fm removeItemAtPath:replacement error:nil];
+    if (!replaced) return nil;
+    return @{@"segCountMismatch": @((patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) != 0),
+             @"LCTweakLoaderCantInject": @((patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) != 0)};
+}
++ (NSNumber *)containerClassicMode:(NSString *)path error:(NSError **)error {
+#if TARGET_OS_SIMULATOR
+    return @0;
+#else
+    @try {
+        NSNumber *mode = LCGetDefaultClassicMode([NSURL fileURLWithPath:path]);
+        if (!mode) fail(error, @"当前系统无法确定此应用的经典显示模式。");
+        return mode;
+    } @catch (NSException *exception) { fail(error, exception.reason ?: @"无法启用经典显示模式。"); return nil; }
+#endif
 }
 + (BOOL)isSignatureTrusted:(NSString *)path {
 #if TARGET_OS_SIMULATOR
@@ -64,6 +99,7 @@ static BOOL fail(NSError **error, NSString *message) {
     if (self.localFileAccessRequiresRestart)
         return fail(error, @"本机文件访问的权限未能释放，请完全退出 Retools 后重新打开，再启动容器。");
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults removeObjectForKey:@"RetoolsGuestPluginError"];
     [defaults setObject:folder forKey:@"selected"];
     [defaults setObject:container forKey:@"selectedContainer"];
     // Bootstrap only uses this as a JIT-less presence marker. The secret stays in Keychain.
@@ -72,7 +108,10 @@ static BOOL fail(NSError **error, NSString *message) {
     if (jit) [defaults removeObjectForKey:@"LCCertificatePassword"];
     else [defaults setObject:@"retools-keychain" forKey:@"LCCertificatePassword"];
     [defaults synchronize];
-    if (![LCSharedUtils launchToGuestAppWithClassicMode:0]) {
+    NSString *home = NSHomeDirectory();
+    NSDictionary *metadata = [NSDictionary dictionaryWithContentsOfFile:[NSString stringWithFormat:@"%@/Documents/Applications/%@/LCAppInfo.plist", home, folder]];
+    NSUInteger classicMode = [metadata[@"classicMode"] boolValue] ? [metadata[@"LCClassicModeCache"][@"defaultClassicMode"] unsignedIntegerValue] : 0;
+    if (![LCSharedUtils launchToGuestAppWithClassicMode:classicMode]) {
         [defaults removeObjectForKey:@"selected"]; [defaults removeObjectForKey:@"selectedContainer"];
         return fail(error, @"系统没有接受容器重启请求。");
     }

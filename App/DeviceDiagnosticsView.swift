@@ -5,7 +5,8 @@ import SwiftUI
 struct DeviceCrashReportsView: View {
     @EnvironmentObject private var renewal: RenewalController
     @ObservedObject private var tools = DeviceToolsStore.shared
-    @State private var onlySideloaded = true
+    @State private var onlySideloaded = false
+    @State private var query = ""
     @State private var confirmClear = false
 
     /// 侧载应用的进程名（可执行文件名和显示名都算）。
@@ -13,22 +14,27 @@ struct DeviceCrashReportsView: View {
         Set(tools.sideloadedApps.flatMap { [$0.executable, $0.name] }.filter { !$0.isEmpty })
     }
     private var visible: [DeviceCrashEntry] {
-        onlySideloaded ? tools.crashReports.filter { sideloadedProcesses.contains($0.process) } : tools.crashReports
+        tools.crashReports.filter { (!onlySideloaded || sideloadedProcesses.contains($0.process)) && (query.isEmpty || $0.process.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query)) }
     }
 
     var body: some View {
         List {
+            ToolPageIntro(tool: .crashes, title: "崩溃与异常记录", detail: "按应用查看崩溃、内存与性能报告，可导出完整报告排查问题。")
             Section {
+                ToolMetrics(items: [("全部报告", "\(tools.crashReports.count)"), ("当前显示", "\(visible.count)")])
                 Toggle("只看侧载应用", isOn: $onlySideloaded).accessibilityIdentifier("deviceTools.crash.filter")
             } footer: { Text("报告由系统生成，较旧的会被自动清理。删除后无法恢复。") }
+            if onlySideloaded, tools.appsPhase != .ready {
+                DeviceServiceStatus(phase: tools.appsPhase) { await tools.loadApps(renewal: renewal) }
+            }
             switch tools.crashPhase {
             case .failed(let message):
                 Section { Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).textSelection(.enabled) }
-            case .idle, .loading where tools.crashReports.isEmpty:
-                Section { HStack { ProgressView(); Text("正在读取崩溃日志…").foregroundStyle(.secondary) } }
+            case .idle where tools.crashReports.isEmpty, .loading where tools.crashReports.isEmpty:
+                Section { HStack { ProgressView(); Text("正在读取崩溃日志…").foregroundStyle(Color.secondary) } }
             default:
-                if visible.isEmpty {
-                    ContentUnavailableView(onlySideloaded ? "侧载应用没有崩溃记录" : "没有崩溃日志", systemImage: "checkmark.shield")
+                if visible.isEmpty, !onlySideloaded || tools.appsPhase == .ready {
+                    ContentUnavailableView(query.isEmpty ? (onlySideloaded ? "侧载应用没有崩溃记录" : "没有崩溃日志") : "没有匹配的报告", systemImage: "checkmark.shield", description: Text("可切换筛选条件，或下拉重新读取。"))
                 }
                 let groups = Dictionary(grouping: visible, by: \.process).sorted { ($0.value.first?.date ?? .distantPast) > ($1.value.first?.date ?? .distantPast) }
                 ForEach(groups, id: \.key) { process, entries in
@@ -42,8 +48,12 @@ struct DeviceCrashReportsView: View {
             }
             if let busy = tools.busy { Section { HStack { ProgressView(); Text(busy) } } }
         }
-        .scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle("崩溃日志").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .toolListStyle()
+        .searchable(text: $query, prompt: "进程名称或报告文件名")
+        .onChange(of: onlySideloaded) { _, enabled in
+            if enabled, tools.appsPhase != .ready { Task { await tools.loadApps(renewal: renewal) } }
+        }
+        .navigationTitle("崩溃日志").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("清空") { confirmClear = true }.disabled(visible.isEmpty || tools.busy != nil).accessibilityIdentifier("deviceTools.crash.clear")
@@ -51,6 +61,9 @@ struct DeviceCrashReportsView: View {
         }
         .refreshable { await tools.loadCrashReports(renewal: renewal) }
         .task { await tools.loadCrashReports(renewal: renewal) }
+        .alert("崩溃日志", isPresented: Binding(get: { tools.errorMessage != nil }, set: { if !$0 { tools.errorMessage = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: { Text(tools.errorMessage ?? "") }
         .confirmationDialog("删除这里列出的 \(visible.count) 份崩溃日志？", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("删除", role: .destructive) { Task { await tools.removeCrashReports(visible, renewal: renewal) } }
         } message: { Text("删除后无法恢复。") }
@@ -65,7 +78,7 @@ private struct DeviceCrashRow: View {
                 .foregroundStyle(entry.kind == .crash ? .red : .orange).frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.date?.formatted(date: .abbreviated, time: .shortened) ?? entry.name).lineLimit(1)
-                Text("\(entry.kindTitle) · \(entry.size.byteLabel)").font(.caption).foregroundStyle(.secondary)
+                Text("\(entry.kindTitle) · \(entry.size.byteLabel)").font(.caption).foregroundStyle(Color.secondary)
             }
         }
     }
@@ -94,7 +107,7 @@ struct DeviceCrashDetailView: View {
                 if !detail.exception.isEmpty || !detail.termination.isEmpty {
                     Section("原因") {
                         if !detail.exception.isEmpty { Text(detail.exception).font(.callout.monospaced()).textSelection(.enabled) }
-                        if !detail.termination.isEmpty { Text(detail.termination).font(.callout.monospaced()).foregroundStyle(.secondary).textSelection(.enabled) }
+                        if !detail.termination.isEmpty { Text(detail.termination).font(.callout.monospaced()).foregroundStyle(Color.secondary).textSelection(.enabled) }
                     }
                 }
                 if !detail.frames.isEmpty {
@@ -110,11 +123,11 @@ struct DeviceCrashDetailView: View {
                     }
                 }
             } else if failure == nil {
-                HStack { ProgressView(); Text("正在读取…").foregroundStyle(.secondary) }
+                HStack { ProgressView(); Text("正在读取…").foregroundStyle(Color.secondary) }
             }
         }
-        .scrollContentBackground(.hidden).ambientBackground()
-        .navigationTitle(entry.process).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .toolListStyle()
+        .navigationTitle(entry.process).navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let file { ToolbarItem(placement: .primaryAction) { ShareLink(item: file) { Image(systemName: "square.and.arrow.up") } } }
         }
@@ -142,6 +155,18 @@ struct DeviceLogConsoleView: View {
     var body: some View {
         let lines = logs.visible
         VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                ToolGlyph(symbol: WorkspaceTool.logs.symbol, color: WorkspaceTool.logs.color, size: 34)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(logs.isRunning ? "正在接收设备日志" : "设备日志控制台").font(.subheadline.weight(.semibold))
+                    Text(logs.isRunning ? "筛选与暂停显示不影响接收" : "开始后接收系统与应用输出").font(.caption).foregroundStyle(Color.secondary)
+                }
+                Spacer(minLength: 0)
+                Button { logs.isRunning ? logs.stop() : logs.start(renewal: renewal) } label: {
+                    Label(logs.isRunning ? "停止" : "开始", systemImage: logs.isRunning ? "stop.fill" : "play.fill").labelStyle(TightLabelStyle())
+                }.buttonStyle(.borderedProminent).controlSize(.small)
+                    .accessibilityIdentifier("deviceTools.logs.toggle")
+            }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
             filterBar
             if let failure = logs.failure {
                 Label(failure, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
@@ -149,11 +174,11 @@ struct DeviceLogConsoleView: View {
             }
             ScrollViewReader { proxy in
                 List(lines) { line in DeviceLogRow(line: line).listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)) }
-                    .listStyle(.plain)
+                    .listStyle(.plain).scrollContentBackground(.hidden)
                     .overlay {
                         if lines.isEmpty {
                             ContentUnavailableView(logs.isRunning ? "等待日志…" : "实时日志", systemImage: "text.alignleft",
-                                                   description: Text(logs.isRunning ? "有新日志时会显示在这里。" : "点右上角开始，读取这台 iPhone 的系统与应用日志。"))
+                                                   description: Text(logs.isRunning ? "有新日志时会显示在这里。" : "点上方「开始」，接收这台 iPhone 的系统与应用日志。"))
                         }
                     }
                     .onChange(of: lines.last?.id) { _, id in
@@ -164,7 +189,7 @@ struct DeviceLogConsoleView: View {
             statusBar(count: lines.count)
         }
         .background(AmbientBackground())
-        .navigationTitle("实时日志").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        .navigationTitle("实时日志").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Menu {
@@ -173,9 +198,6 @@ struct DeviceLogConsoleView: View {
                         .disabled(lines.isEmpty)
                     Button(role: .destructive) { logs.clear() } label: { Label("清空", systemImage: "trash") }
                 } label: { Image(systemName: "ellipsis.circle") }
-                Button { logs.isRunning ? logs.stop() : logs.start(renewal: renewal) } label: {
-                    Image(systemName: logs.isRunning ? "stop.fill" : "play.fill")
-                }.accessibilityIdentifier("deviceTools.logs.toggle")
             }
         }
         .sheet(item: $share) { SigningProjectShareSheet(urls: $0.urls) }
@@ -184,9 +206,9 @@ struct DeviceLogConsoleView: View {
     private var filterBar: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                Image(systemName: "magnifyingglass").foregroundStyle(Color.secondary)
                 TextField("筛选内容、进程或子系统", text: $logs.query).textInputAutocapitalization(.never).autocorrectionDisabled()
-                if !logs.query.isEmpty { Button { logs.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) } }
+                if !logs.query.isEmpty { Button { logs.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Color.secondary) } }
             }
             .padding(.horizontal, 12).padding(.vertical, 9).background(.thinMaterial, in: Capsule())
             ScrollView(.horizontal, showsIndicators: false) {
@@ -213,7 +235,7 @@ struct DeviceLogConsoleView: View {
             Spacer()
             Text("显示 \(count) / \(logs.lines.count) 条" + (logs.dropped > 0 ? "，跳过 \(logs.dropped)" : "")).monospacedDigit()
         }
-        .font(.caption).foregroundStyle(.secondary).padding(.horizontal).padding(.vertical, 8).bottomBarBackground()
+        .font(.caption).foregroundStyle(Color.secondary).padding(.horizontal).padding(.vertical, 8).bottomBarBackground()
     }
 
     private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -238,8 +260,8 @@ private struct DeviceLogRow: View {
                 Text(line.date.formatted(.dateTime.hour().minute().second())).monospacedDigit()
                 Text(line.process).fontWeight(.semibold).lineLimit(1)
                 if line.level != 0 { Text(line.levelTitle).foregroundStyle(line.isError ? .red : .secondary) }
-                if !line.subsystem.isEmpty { Text(line.subsystem).foregroundStyle(.tertiary).lineLimit(1) }
-            }.font(.caption2).foregroundStyle(.secondary)
+                if !line.subsystem.isEmpty { Text(line.subsystem).foregroundStyle(Palette.tertiaryText).lineLimit(1) }
+            }.font(.caption2).foregroundStyle(Color.secondary)
             Text(line.message).font(.caption.monospaced()).foregroundStyle(line.isError ? Color.red : Color.primary).lineLimit(8).textSelection(.enabled)
         }
     }

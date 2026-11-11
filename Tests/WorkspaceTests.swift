@@ -31,6 +31,9 @@ final class WorkspaceTests: XCTestCase {
         word(0xfeedfacf, at: 0); word(0x0100000c, at: 4); word(1, at: 16); word(16, at: 20)
         word(0x2c, at: 32); word(UInt32.max, at: 36)
         XCTAssertThrowsError(try MachOInspector.inspect(data))
+        let file = root.appendingPathComponent("TruncatedMachO")
+        try data.write(to: file)
+        XCTAssertThrowsError(try MachOInspector.inspect(file))
     }
     func testMachODetectsEncryption() throws {
         var data = Data(repeating: 0, count: 56)
@@ -39,6 +42,132 @@ final class WorkspaceTests: XCTestCase {
         word(0x2c, at: 32); word(24, at: 36); word(1, at: 48)
         let result = try MachOInspector.inspect(data)
         XCTAssertTrue(result.isEncrypted); XCTAssertTrue(result.hasARM64)
+    }
+    func testMachOReadsGuestSDKSeparatelyFromMinimumOS() throws {
+        for command: UInt32 in [0x32, 0x25] {
+            let length = command == 0x32 ? 24 : 16
+            var data = Data(repeating: 0, count: 32 + length)
+            func word(_ value: UInt32, at offset: Int) { for i in 0..<4 { data[offset+i] = UInt8(truncatingIfNeeded: value >> (i*8)) } }
+            word(0xfeedfacf, at: 0); word(0x0100000c, at: 4)
+            word(1, at: 16); word(UInt32(length), at: 20)
+            word(command, at: 32); word(UInt32(length), at: 36)
+            if command == 0x32 { word(2, at: 40) }
+            word(0x00110000, at: command == 0x32 ? 44 : 40)
+            word(0x00120501, at: command == 0x32 ? 48 : 44)
+            let result = try MachOInspector.inspect(data)
+            XCTAssertEqual(result.minimumOS, "17.0.0")
+            XCTAssertEqual(result.sdkVersion, 0x00120501)
+            try MachOInspector.setMinimumOS(0x00100000, in: &data)
+            XCTAssertEqual(try MachOInspector.inspect(data).sdkVersion, 0x00120501)
+            if command == 0x32 {
+                word(7, at: 40) // An iOS simulator SDK must not configure a device guest.
+                XCTAssertNil(try MachOInspector.inspect(data).sdkVersion)
+                word(2, at: 40); word(0x01000007, at: 4)
+                XCTAssertNil(try MachOInspector.inspect(data).sdkVersion)
+            }
+        }
+    }
+    func testMachOReadsFatFileAcrossLargeSparseGaps() throws {
+        func binary(cpu: UInt32, sdk: UInt32) -> Data {
+            var data = Data(repeating: 0, count: 56)
+            func word(_ value: UInt32, at offset: Int) { for i in 0..<4 { data[offset+i] = UInt8(truncatingIfNeeded: value >> (i*8)) } }
+            word(0xfeedfacf, at: 0); word(cpu, at: 4); word(2, at: 12)
+            word(1, at: 16); word(24, at: 20)
+            word(0x32, at: 32); word(24, at: 36); word(2, at: 40)
+            word(0x00110000, at: 44); word(sdk, at: 48)
+            return data
+        }
+        let file = root.appendingPathComponent("SparseUniversalMachO")
+        var header = Data()
+        for value: UInt32 in [0xcafebabe, 2, 0x01000007, 3, 65_536, 56, 16, 0x0100000c, 0, 268_435_456, 56, 16] {
+            for shift in [24, 16, 8, 0] { header.append(UInt8(truncatingIfNeeded: value >> shift)) }
+        }
+        try header.write(to: file)
+        let handle = try FileHandle(forWritingTo: file)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: 65_536); try handle.write(contentsOf: binary(cpu: 0x01000007, sdk: 0x001b0000))
+        try handle.seek(toOffset: 268_435_456); try handle.write(contentsOf: binary(cpu: 0x0100000c, sdk: 0x00120501))
+        let result = try MachOInspector.inspect(file)
+        XCTAssertTrue(result.hasARM64); XCTAssertFalse(result.isEncrypted)
+        XCTAssertEqual(result.sdkVersion, 0x00120501); XCTAssertEqual(result.minimumOS, "17.0.0")
+        // A truncated slice must still be rejected by the file-backed reader.
+        try handle.truncate(atOffset: 268_435_480)
+        XCTAssertThrowsError(try MachOInspector.inspect(file))
+    }
+    func testMachOFileReaderPreservesPathsAcrossReadBoundaries() throws {
+        let dependency = "@executable_path/Frameworks/注入插件.dylib", rpath = "@loader_path/Frameworks"
+        let padding = 65_496, libraryLength = (24 + dependency.utf8.count + 8) & ~7, rpathLength = (12 + rpath.utf8.count + 8) & ~7
+        var data = Data(repeating: 0, count: 32 + padding + libraryLength + rpathLength)
+        func word(_ value: UInt32, at offset: Int) { for i in 0..<4 { data[offset+i] = UInt8(truncatingIfNeeded: value >> (i*8)) } }
+        word(0xfeedfacf, at: 0); word(0x0100000c, at: 4); word(2, at: 12)
+        word(3, at: 16); word(UInt32(data.count - 32), at: 20)
+        word(0x1b, at: 32); word(UInt32(padding), at: 36)
+        let libraryOffset = 32 + padding, rpathOffset = libraryOffset + libraryLength
+        word(0xc, at: libraryOffset); word(UInt32(libraryLength), at: libraryOffset+4); word(24, at: libraryOffset+8)
+        data.replaceSubrange(libraryOffset+24..<libraryOffset+24+dependency.utf8.count, with: dependency.utf8)
+        word(0x8000001c, at: rpathOffset); word(UInt32(rpathLength), at: rpathOffset+4); word(12, at: rpathOffset+8)
+        data.replaceSubrange(rpathOffset+12..<rpathOffset+12+rpath.utf8.count, with: rpath.utf8)
+        let file = root.appendingPathComponent("BoundaryMachO")
+        try data.write(to: file)
+        for result in [try MachOInspector.inspect(data), try MachOInspector.inspect(file)] {
+            XCTAssertEqual(result.dependencies.map(\.path), [dependency]); XCTAssertEqual(result.rpaths, [rpath])
+        }
+    }
+    func testContainerRestoresGuestSDKCompatibilityForExistingImports() async throws {
+        let service = WorkspaceService(paths: paths, state: WorkspaceState())
+        var state = try await service.importIPA(fixture("Fixture", ext: "ipa"))
+        state = try await service.installContainer(try XCTUnwrap(state.packages.first?.id))
+        let app = try XCTUnwrap(state.containerApps.first)
+        let directory = paths.applications.appendingPathComponent(app.folder)
+        let file = directory.appendingPathComponent("LCAppInfo.plist")
+        func metadata() throws -> [String: Any] {
+            try XCTUnwrap(PropertyListSerialization.propertyList(from: Data(contentsOf: file), format: nil) as? [String: Any])
+        }
+        let originalSDK = try XCTUnwrap(MachOInspector.inspect(directory.appendingPathComponent("Fixture")).sdkVersion)
+        XCTAssertEqual(try metadata()["spoofSDKVersion"] as? UInt32, max(originalSDK, 0x000b0000))
+        // Give the fixture an older SDK than the test host, so using the host's
+        // SDK or Info.plist cannot accidentally satisfy this regression test.
+        let executable = directory.appendingPathComponent("Fixture")
+        var binary = try Data(contentsOf: executable)
+        func word(_ offset: Int) -> UInt32 { binary[offset..<offset+4].enumerated().reduce(0) { $0 | UInt32($1.element) << ($1.offset * 8) } }
+        var cursor = 32, sdkOffset: Int?
+        for _ in 0..<word(16) {
+            let kind = word(cursor)
+            if kind == 0x32 || kind == 0x25 { sdkOffset = cursor + (kind == 0x32 ? 16 : 12); break }
+            cursor += Int(word(cursor + 4))
+        }
+        let offset = try XCTUnwrap(sdkOffset)
+        func setGuestSDK(_ value: UInt32) throws {
+            for i in 0..<4 { binary[offset+i] = UInt8(truncatingIfNeeded: value >> (i*8)) }
+            // Preserve the signed fixture's inode and signature while changing
+            // its header, matching LC's in-place executable patching.
+            let handle = try FileHandle(forWritingTo: executable)
+            defer { try? handle.close() }
+            try handle.seek(toOffset: UInt64(offset))
+            try handle.write(contentsOf: binary[offset..<offset+4])
+        }
+        let guestSDK: UInt32 = 0x00120501
+        try setGuestSDK(guestSDK)
+        state = try await service.selectContainer(appID: app.id, containerID: app.selectedContainerID)
+        let marker = paths.data.appendingPathComponent(app.selectedContainerID.uuidString + "/Documents/value.txt")
+        try Data("keep guest data".utf8).write(to: marker)
+        var legacy = try metadata(); legacy.removeValue(forKey: "spoofSDKVersion")
+        try PropertyListSerialization.data(fromPropertyList: legacy, format: .binary, options: 0).write(to: file)
+        // Launch preparation rewrites legacy metadata before checking credentials.
+        // No certificate is supplied so this test never launches guest code.
+        do { _ = try await service.prepareLaunch(app.id) } catch {}
+        XCTAssertEqual(try metadata()["spoofSDKVersion"] as? UInt32, guestSDK)
+        XCTAssertEqual(try metadata()["LCDataUUID"] as? String, app.selectedContainerID.uuidString)
+        XCTAssertEqual(try String(contentsOf: marker), "keep guest data")
+        state = try await service.addContainer(to: app.id, name: "第二空间")
+        XCTAssertEqual(try metadata()["spoofSDKVersion"] as? UInt32, guestSDK)
+        XCTAssertEqual(state.containerApps.first?.containers.count, 2)
+        try setGuestSDK(0x00090000)
+        _ = try await service.selectContainer(appID: app.id, containerID: app.selectedContainerID)
+        XCTAssertEqual(try metadata()["spoofSDKVersion"] as? UInt32, 0x000b0000)
+        try setGuestSDK(0)
+        _ = try await service.selectContainer(appID: app.id, containerID: app.selectedContainerID)
+        XCTAssertNil(try metadata()["spoofSDKVersion"])
     }
     func testIdentityBundleMatchingDoesNotBroadenWildcard() {
         var identity = SigningIdentity(id: UUID(), name: "Test", teamID: "TEAM", profileName: "Profile", applicationIdentifier: "TEAM.com.example.*", expiresAt: .distantFuture, certificateExpiresAt: .distantFuture, fingerprint: "test", importedAt: Date())

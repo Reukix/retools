@@ -64,12 +64,12 @@ struct DevelopmentSigningView: View {
                         do { try migration.copyRecoveryCode() }
                         catch { renewal.errorMessage = error.localizedDescription }
                     }.accessibilityIdentifier("development.copyRecovery")
-                    Text(migration.result.isEmpty ? "换签名团队前，请先复制恢复码并保存在自己的密码管理器中。开发版首次打开时粘贴恢复账号、证书密码和设备配对。" : migration.result).font(.footnote).foregroundStyle(.secondary)
+                    Text(migration.result.isEmpty ? "换签名团队前，请先复制恢复码并保存在自己的密码管理器中。开发版首次打开时粘贴恢复账号、证书密码和设备配对。" : migration.result).font(.footnote).foregroundStyle(Color.secondary)
                     ShareLink("导出开发签名 IPA", item: ipa)
                 } header: { Text("签名包已准备") }
             }
             if renewal.isWorking { ProgressView() }
-        }.scrollContentBackground(.hidden).ambientBackground().navigationTitle("Apple ID 开发签名").navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar)
+        }.scrollContentBackground(.hidden).ambientBackground().navigationTitle("Apple ID 开发签名").navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 accountID = renewal.settings.accounts.contains(where: { $0.id == renewal.settings.email }) ? renewal.settings.email : renewal.settings.defaultAccountID
                 renewal.inspectDevelopmentPackage()
